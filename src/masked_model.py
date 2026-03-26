@@ -103,6 +103,20 @@ class MultiMaskSNIPWrapper(nn.Module):
         print("Mask initialization complete. Temporary GPU model cleared.")
 
     def forward(self, input_data, modalities):
+        """
+        Forward pass optimized for modality-specific batching.
+        
+        When using ModalitySpecificSampler, each batch contains only one modality,
+        so we can skip the modality loop and process the entire batch in a single
+        forward pass with minimal mask switching overhead.
+        
+        Args:
+            input_data: Tensor of shape [B, C, H, W, D]
+            modalities: Tensor of modality codes (should be identical for all samples in batch)
+        
+        Returns:
+            Tensor of shape [B, 1] - model predictions
+        """
         if not self.masks_registered:
             return self.model(input_data)
         
@@ -110,28 +124,44 @@ class MultiMaskSNIPWrapper(nn.Module):
         input_device = input_data.device
         assert device == input_device, f"Input data and model must be on the same device, got model device {device} and input device {input_device}"
 
-        batch_size = input_data.shape[0]
+        # OPTIMIZATION: Check if batch is modality-homogeneous (single unique modality)
+        unique_mods = torch.unique(modalities)
         
-        # Output container (Assuming Binary Classification [B, 1])
-        final_outputs = torch.zeros(batch_size, 1, device=device) 
-        
-        unique_mods = torch.unique(modalities).cpu().tolist()
-
-        for mod in unique_mods:
-            mod_idx = (modalities == mod)
-            sub_data = input_data[mod_idx]
+        if len(unique_mods) == 1:
+            # FAST PATH: Single modality in batch (modality-specific batching)
+            mod = unique_mods.item()
             
-            # A. Set the Active Modality
+            # Set mask once for entire batch
             self._set_active_modality(mod)
             
-            # B. Forward Pass (Autograd tracks: output = weight * mask_mod)
-            sub_output = self.model(sub_data)
-            final_outputs[mod_idx] = sub_output
+            # Single forward pass for entire batch
+            output = self.model(input_data)
             
-        # C. Reset to Identity (No mask)
-        self._set_active_modality(None)
-        
-        return final_outputs
+            # Reset mask
+            self._set_active_modality(None)
+            
+            return output
+        else:
+            # SLOW PATH: Mixed modalities in batch (legacy behavior)
+            # This should rarely happen when using ModalitySpecificSampler
+            batch_size = input_data.shape[0]
+            final_outputs = torch.zeros(batch_size, 1, device=device)
+            
+            # Pre-compute indices for each modality
+            modality_indices = {}
+            for mod in unique_mods.cpu().tolist():
+                modality_indices[mod] = torch.where(modalities == mod)[0]
+
+            for mod in unique_mods.cpu().tolist():
+                mod_idx = modality_indices[mod]
+                sub_data = input_data[mod_idx]
+                
+                self._set_active_modality(mod)
+                sub_output = self.model(sub_data)
+                final_outputs[mod_idx] = sub_output
+                
+            self._set_active_modality(None)
+            return final_outputs
 
     def _set_active_modality(self, mod_id):
         """Iterates over modules to toggle the active mask state."""
