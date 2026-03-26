@@ -40,32 +40,41 @@ class MultiMaskSNIPWrapper(nn.Module):
         self.sparsity = sparsity
         self.masks_registered = False
 
-    def register_multimodal_masks(self, modalities, input_data, labels):
+    def register_multimodal_masks(self, modalities, input_data, labels, sub_batch_size=4):
         """
         Initialization step (Run ONCE before training):
-        1. Creates a temporary CPU copy of the model for SNIP calculation.
+        1. Creates a temporary GPU copy of the model for SNIP calculation.
         2. Generates masks for each modality found in the input.
-        3. Registers the masks as parametrizations on the main model.
+        3. Processes data in sub-batches to stay within VRAM limits.
+        4. Registers the masks as parametrizations on the main model.
+
+        Args:
+            modalities: Tensor of modality codes for each sample
+            input_data: Tensor of input volumes
+            labels: Tensor of labels
+            sub_batch_size: Number of volumes to process at once (default: 4)
         """
-        # Create temp model for calculations (prevents messing with main model gradients)
-        cpu_model = deepcopy(self.model).to('cpu')
-        cpu_optimizer = torch.optim.SGD(cpu_model.parameters(), 0.1)
-        
-        # Determine target device for final masks (usually the GPU the main model is on)
+        # Determine target device (GPU the main model is on)
         target_device = next(iter(self.model.parameters())).device
+
+        # Create temp model on GPU (not CPU to avoid system RAM spike)
+        temp_model = deepcopy(self.model).to(target_device)
+        temp_optimizer = torch.optim.SGD(temp_model.parameters(), 0.1)
 
         # 1. Generate Masks Dictionary: {mod_id: {layer_name: mask}}
         temp_mask_storage = {}
         unique_modalities = torch.unique(modalities).cpu().detach().tolist()
-        
+
         for mod in unique_modalities:
             print(f"Generating SNIP masks for modality: {mod}")
             mask_idx = (modalities == mod)
-            batch = (input_data[mask_idx], labels[mask_idx])
-            
-            # Calculate scores using local CPU model
-            masks_by_name = self._generate_mask_from_grad_scores(
-                cpu_model, cpu_optimizer, batch, target_device
+            mod_data = input_data[mask_idx]
+            mod_labels = labels[mask_idx]
+
+            # Calculate scores using sub-batches to manage VRAM
+            masks_by_name = self._generate_mask_from_grad_scores_batched(
+                temp_model, temp_optimizer, mod_data, mod_labels,
+                target_device, sub_batch_size=sub_batch_size
             )
             temp_mask_storage[mod] = masks_by_name
 
@@ -79,17 +88,19 @@ class MultiMaskSNIPWrapper(nn.Module):
                     if name in mask_dict:
                         layer_masks[mod] = mask_dict[name]
                         has_masks = True
-                
+
                 if has_masks:
                     snip_mask_module = MultimodalSNIPMask(layer_masks)
                     parametrize.register_parametrization(module, "weight", snip_mask_module)
-        
+
         self.masks_registered = True
-        
-        # Cleanup to free memory
-        del cpu_model
-        del cpu_optimizer
-        print("Mask initialization complete. Temporary CPU model cleared.")
+
+        # Cleanup to free GPU memory
+        del temp_model
+        del temp_optimizer
+        if target_device.type == 'cuda':
+            torch.cuda.empty_cache()
+        print("Mask initialization complete. Temporary GPU model cleared.")
 
     def forward(self, input_data, modalities):
         if not self.masks_registered:
@@ -153,27 +164,69 @@ class MultiMaskSNIPWrapper(nn.Module):
         self.masks_registered = True
 
     # --- INTERNAL SNIP HELPERS ---
+    def _generate_mask_from_grad_scores_batched(self, model, optimizer, data, labels, target_device, sub_batch_size=4):
+        """
+        Generate masks by processing data in sub-batches to manage VRAM.
+        Accumulates scores across all sub-batches before computing threshold.
+        """
+        accumulated_scores = {}
+        n_samples = data.shape[0]
+
+        # Safety check: if no samples, return empty masks
+        if n_samples == 0:
+            return {}
+
+        model.train()
+
+        for start_idx in range(0, n_samples, sub_batch_size):
+            end_idx = min(start_idx + sub_batch_size, n_samples)
+            sub_data = data[start_idx:end_idx].to(target_device)
+            sub_labels = labels[start_idx:end_idx].to(target_device)
+
+            optimizer.zero_grad()
+            preds = model(sub_data)
+            loss = F.binary_cross_entropy_with_logits(preds, sub_labels.float())
+            loss.backward()
+
+            # Accumulate scores (sum of absolute values across sub-batches)
+            for name, module in model.named_modules():
+                if isinstance(module, PRUNE_LAYERS) and module.weight.grad is not None:
+                    score = (module.weight.grad * module.weight.data).abs()
+                    if name not in accumulated_scores:
+                        accumulated_scores[name] = score.clone()
+                    else:
+                        accumulated_scores[name] += score
+
+            # Clear GPU cache periodically
+            if target_device.type == 'cuda':
+                torch.cuda.empty_cache()
+
+        # Compute threshold from accumulated scores
+        threshold = self._get_threshold_from_scores(accumulated_scores)
+
+        # Generate masks
+        masks = {}
+        for name, values in accumulated_scores.items():
+            masks[name] = (values > threshold).float().to(target_device)
+        return masks
+
     def _generate_mask_from_grad_scores(self, model, optimizer, batch, target_device):
+        """Legacy method - kept for backward compatibility."""
         scores_dict = self._calculate_scores(model, optimizer, batch)
         threshold = self._get_threshold_from_scores(scores_dict)
-        
         masks = {}
         for name, values in scores_dict.items():
             masks[name] = (values > threshold).float().to(target_device)
         return masks
-
     def _calculate_scores(self, model, optimizer, batch):
+        """Calculate SNIP scores - data should already be on the correct device."""
         data, labels = batch
-        # Force data to CPU to match the CPU copy of the model
-        data, labels = data.to('cpu'), labels.to('cpu')
-        
+        # Note: data should already be on target_device (GPU)
         model.train()
         optimizer.zero_grad()
-        
         preds = model(data)
         loss = F.binary_cross_entropy_with_logits(preds, labels.float())
         loss.backward()
-        
         scores_d = {}
         for name, module in model.named_modules():
             if isinstance(module, PRUNE_LAYERS) and module.weight.grad is not None:
