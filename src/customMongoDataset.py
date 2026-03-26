@@ -25,7 +25,7 @@ class CustomMongoDataset(MongoDataset):
     def __getitem__(self, batch):
         # Fetch all samples for ids in the batch and where 'kind' is either
         # data or label as specified by the sample parameter
-        
+
         samples = list(
             self.collection["bin"].find(
                 {
@@ -35,6 +35,19 @@ class CustomMongoDataset(MongoDataset):
                 self.fields,
             )
         )
+
+        # Batch metadata query: fetch all metadata for the batch at once (not N queries)
+        batch_ids = [self.indices[_] for _ in batch]
+        all_meta = list(
+            self.collection["meta"].find(
+                {
+                    self.id: {"$in": batch_ids},
+                },
+                self.meta_sample,
+            )
+        )
+        # Create mapping from ID to metadata for fast lookup
+        meta_lookup = {meta[self.id]: meta for meta in all_meta}
 
         results = {}
         for id in batch:
@@ -48,19 +61,11 @@ class CustomMongoDataset(MongoDataset):
             # Separate processing for each 'kind' # TODO: for multimodal, pull all kinds here and then just match them with labels properly
             data = self.make_serial(samples_for_id, self.sample[0])
 
-            meta_for_id = list(
-                self.collection["meta"].find(
-                    {
-                        self.id: self.indices[id],
-                    },
-                    self.meta_sample,
-                )
-            )
+            # Lookup metadata from pre-fetched batch (no DB query here)
+            meta_for_id = meta_lookup.get(self.indices[id])
+            assert meta_for_id is not None, f"No meta entries found for id {id}"
 
-            assert len(meta_for_id) != 0, f"No meta entries found for id {id}"
-            assert len(meta_for_id) < 2, f"More than one meta entry found for id {id}"
-            
-            label = meta_for_id[0][self.meta_sample[0]]
+            label = meta_for_id[self.meta_sample[0]]
 
             # Add to results
             results[id] = {
@@ -99,7 +104,7 @@ class MultimodalMongoDataset(MongoDataset):
         # Fetch all samples for ids in the batch and where 'kind' is either
         # data or label as specified by the sample parameter
         # TODO: make it respect the batch size; right now it returns a bigger batch with multiple modalities per id
-        
+
         samples = list(
             self.collection["bin"].find(
                 {
@@ -110,25 +115,28 @@ class MultimodalMongoDataset(MongoDataset):
             )
         )
 
+        # Batch metadata query: fetch all metadata for the batch at once (not N queries)
+        batch_ids = [self.indices[_] for _ in batch]
+        all_meta = list(
+            self.collection["meta"].find(
+                {
+                    self.id: {"$in": batch_ids},
+                },
+                self.meta_sample + ("modalities",),
+            )
+        )
+        # Create mapping from ID to metadata for fast lookup
+        meta_lookup = {meta[self.id]: meta for meta in all_meta}
+
         results = {}
         for id in batch:
-            # get ID's label and modalities
-            meta_for_id = list(
-                self.collection["meta"].find(
-                    {
-                        self.id: self.indices[id],
-                    },
-                    self.meta_sample + ("modalities",),
-                )
-            )
+            # Lookup metadata from pre-fetched batch (no DB query here)
+            meta_for_id = meta_lookup.get(self.indices[id])
+            assert meta_for_id is not None, f"No meta entries found for id {id}"
 
-            assert len(meta_for_id) != 0, f"No meta entries found for id {id}"
-            assert len(meta_for_id) < 2, f"More than one meta entry found for id {id}"
-            
-            label = meta_for_id[0][self.meta_sample[0]]
-            modalities = meta_for_id[0]["modalities"]
+            label = meta_for_id[self.meta_sample[0]]
+            modalities = meta_for_id["modalities"]
             id_modalities = set(modalities).intersection(set(self.sample))
-                
 
             # Get samples for this ID
             samples_for_id = [
