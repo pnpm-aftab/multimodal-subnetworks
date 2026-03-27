@@ -6,26 +6,33 @@ eliminating the need for sequential forward passes and mask switching.
 """
 
 import torch
-from torch.utils.data import Sampler
+from torch.utils.data import Sampler, BatchSampler
 from collections import defaultdict
 import random
 
 
-class ModalitySpecificSampler(Sampler):
+class ModalitySpecificBatchSampler(BatchSampler):
     """
-    Sampler that yields batches containing only a single modality.
+    BatchSampler that yields batches containing only a single modality.
     
     This eliminates the M× sequential forward pass bottleneck by ensuring
-    each batch is modality-homogeneous.
+    each batch is modality-homogeneous. Uses BatchSampler for better
+    integration with PyTorch DataLoader - yields lists of indices directly.
     
     Usage:
         dataset = MultimodalMongoDataset(...)
-        sampler = ModalitySpecificSampler(
+        sampler = ModalitySpecificBatchSampler(
             dataset, 
             batch_size=20,
             modality_field="modalities"
         )
-        loader = DataLoader(dataset, sampler=sampler, ...)
+        loader = DataLoader(dataset, batch_sampler=sampler, ...)
+    
+    Improvements over ModalitySpecificSampler:
+    - Uses BatchSampler (PyTorch standard)
+    - Yields lists of indices directly (no tuples)
+    - Single batched DB query at initialization
+    - Simpler dataset integration
     """
     
     def __init__(self, dataset, batch_size, modality_field="modalities", shuffle=True, seed=None):
@@ -37,34 +44,41 @@ class ModalitySpecificSampler(Sampler):
             shuffle: Whether to shuffle batches
             seed: Random seed for reproducibility
         """
+        super().__init__(None, batch_size, drop_last=False)
         self.dataset = dataset
         self.batch_size = batch_size
         self.modality_field = modality_field
         self.shuffle = shuffle
         self.seed = seed
         
-        # Build modality groups
+        # Build modality groups with single batched DB query
         self.modality_groups = self._build_modality_groups()
         
     def _build_modality_groups(self):
         """
         Group dataset indices by their available modalities.
         
+        Uses a SINGLE batched DB query to fetch all metadata, then groups locally.
+        Much faster than N individual queries.
+        
         Returns:
             dict: {modality_name: [indices]}
         """
+        # Fetch ALL metadata in one query (not N queries!)
+        all_meta = list(self.dataset.collection["meta"].find(
+            {}, 
+            {self.modality_field: 1, "id": 1}
+        ))
+        
+        # Build lookup dict for O(1) access
+        meta_lookup = {meta["id"]: meta for meta in all_meta}
+        
+        # Group by modality
         modality_groups = defaultdict(list)
         
         for idx in range(len(self.dataset.indices)):
-            # Get subject ID
             subject_id = self.dataset.indices[idx]
-            
-            # Fetch metadata to get available modalities
-            # Note: This requires DB access - we'll cache it
-            meta = self.dataset.collection["meta"].find_one(
-                {"id": subject_id},
-                {self.modality_field: 1, "id": 1}
-            )
+            meta = meta_lookup.get(subject_id)
             
             if meta and self.modality_field in meta:
                 available_modalities = meta[self.modality_field]
@@ -72,58 +86,46 @@ class ModalitySpecificSampler(Sampler):
                 # For each available modality, add this subject to that group
                 for mod in available_modalities:
                     if mod in self.dataset.sample:  # Only if modality is in our training set
-                        modality_groups[mod].append((idx, mod))
+                        modality_groups[mod].append(idx)  # Store index only, not tuple
         
-        # Convert to lists and shuffle if needed
+        # Shuffle if needed
         result = {}
-        for mod, items in modality_groups.items():
+        for mod, indices in modality_groups.items():
             if self.shuffle:
                 if self.seed is not None:
-                    random.Random(self.seed).shuffle(items)
+                    random.Random(self.seed).shuffle(indices)
                 else:
-                    random.shuffle(items)
-            result[mod] = items
+                    random.shuffle(indices)
+            result[mod] = indices
         
         return result
     
     def __iter__(self):
         """
-        Yield batches of (dataset_index, modality) tuples.
-        Each batch contains only a single modality.
+        Yield batches of dataset indices.
+        Each batch contains only indices from a single modality.
+        
+        Iterates through each modality completely before moving to the next,
+        ensuring homogeneous batches.
+        
+        Yields:
+            list: List of dataset indices [idx1, idx2, ..., idxN]
         """
-        # Create iterators for each modality group
-        modality_iterators = {}
-        for mod, items in self.modality_groups.items():
-            modality_iterators[mod] = iter(items)
+        # Determine order of modalities
+        mod_order = list(self.modality_groups.keys())
+        if self.shuffle:
+            if self.seed is not None:
+                random.Random(self.seed).shuffle(mod_order)
+            else:
+                random.shuffle(mod_order)
         
-        # Track which modalities still have samples
-        active_modalities = set(self.modality_groups.keys())
-        
-        while active_modalities:
-            # Shuffle order of modalities to balance training
-            mod_order = list(active_modalities)
-            if self.shuffle:
-                if self.seed is not None:
-                    random.Random(self.seed).shuffle(mod_order)
-                else:
-                    random.shuffle(mod_order)
+        # Iterate through each modality completely
+        for mod in mod_order:
+            indices = self.modality_groups[mod]
             
-            for mod in mod_order:
-                if mod not in active_modalities:
-                    continue
-                
-                # Collect a batch of this modality
-                batch = []
-                try:
-                    for _ in range(self.batch_size):
-                        batch.append(next(modality_iterators[mod]))
-                except StopIteration:
-                    # This modality is exhausted
-                    if batch:  # Yield partial batch
-                        yield batch
-                    active_modalities.discard(mod)
-                    continue
-                
+            # Yield batches from this modality
+            for i in range(0, len(indices), self.batch_size):
+                batch = indices[i:i + self.batch_size]
                 if batch:
                     yield batch
     
@@ -131,7 +133,7 @@ class ModalitySpecificSampler(Sampler):
         """
         Total number of batches per epoch.
         """
-        total_samples = sum(len(items) for items in self.modality_groups.values())
+        total_samples = sum(len(indices) for indices in self.modality_groups.values())
         return (total_samples + self.batch_size - 1) // self.batch_size
     
     def set_epoch(self, epoch):
@@ -142,6 +144,10 @@ class ModalitySpecificSampler(Sampler):
             self.seed = self.seed + epoch
             # Rebuild groups with new seed
             self.modality_groups = self._build_modality_groups()
+
+
+# Backward compatibility alias
+ModalitySpecificSampler = ModalitySpecificBatchSampler
 
 
 class HybridModalitySampler(Sampler):
@@ -166,7 +172,7 @@ class HybridModalitySampler(Sampler):
         self.shuffle = shuffle
         self.seed = seed
         
-        self.modality_sampler = ModalitySpecificSampler(
+        self.modality_sampler = ModalitySpecificBatchSampler(
             dataset, batch_size, shuffle=shuffle, seed=seed
         )
     

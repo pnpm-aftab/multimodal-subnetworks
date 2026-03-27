@@ -28,7 +28,7 @@ from src.db_client import ClientCreator
 from src.customMongoDataset import CustomMongoDataset, MultimodalMongoDataset, multimodal_collate, make_serial
 from src.masked_model import MultiMaskSNIPWrapper
 from src.utils import setup_distributed_port
-from src.modality_sampler import ModalitySpecificSampler
+from src.modality_sampler import ModalitySpecificBatchSampler
 
 SEED = random.randint(0, 9999)
 utils.set_global_seed(SEED)
@@ -251,8 +251,8 @@ class CustomRunner(dl.Runner):
         # Choose sampler based on configuration and multimodal setting
         if self.multimodal and self._hparams["experiment"].get("use_modality_specific_batching", True):
             # NEW: Modality-specific batching for 2-3× speedup
-            print("Using ModalitySpecificSampler for optimized multimodal training")
-            train_sampler = ModalitySpecificSampler(
+            print("Using ModalitySpecificBatchSampler for optimized multimodal training")
+            train_sampler = ModalitySpecificBatchSampler(
                 train_dataset,
                 batch_size=self.num_volumes,
                 shuffle=True,
@@ -269,7 +269,7 @@ class CustomRunner(dl.Runner):
         train_dataloader = BatchPrefetchLoaderWrapper(
             DataLoader(
                 train_dataset,
-                sampler=train_sampler,
+                batch_sampler=train_sampler,  # Use batch_sampler, not sampler
                 collate_fn=self.collate,
                 pin_memory=True,
                 worker_init_fn=self.funcs["createclient"],
@@ -294,8 +294,8 @@ class CustomRunner(dl.Runner):
         
         # Choose sampler for validation
         if self.multimodal and self._hparams["experiment"].get("use_modality_specific_batching", True):
-            print("Using ModalitySpecificSampler for validation")
-            valid_sampler = ModalitySpecificSampler(
+            print("Using ModalitySpecificBatchSampler for validation")
+            valid_sampler = ModalitySpecificBatchSampler(
                 valid_dataset,
                 batch_size=self.num_volumes,
                 shuffle=False,  # No shuffle for validation
@@ -313,7 +313,7 @@ class CustomRunner(dl.Runner):
         valid_dataloader = BatchPrefetchLoaderWrapper(
             DataLoader(
                 valid_dataset,
-                sampler=valid_sampler,
+                batch_sampler=valid_sampler,  # Use batch_sampler, not sampler
                 collate_fn=self.collate,
                 pin_memory=True,
                 worker_init_fn=self.funcs["createVclient"],
