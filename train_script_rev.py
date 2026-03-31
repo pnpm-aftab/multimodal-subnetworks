@@ -257,6 +257,9 @@ class CustomRunner(dl.Runner):
                 batch_size=self.num_volumes,
                 shuffle=True,
                 seed=SEED,
+                db_host=self.db_host + ":27017",
+                db_name=self.db_name,
+                db_collection=self.db_collection,
             )
         else:
             # LEGACY: Mixed-modality batching
@@ -300,6 +303,9 @@ class CustomRunner(dl.Runner):
                 batch_size=self.num_volumes,
                 shuffle=False,  # No shuffle for validation
                 seed=SEED,
+                db_host=self.db_host + ":27017",
+                db_name=self.db_name,
+                db_collection=self.db_collection,
             )
         else:
             valid_sampler = (
