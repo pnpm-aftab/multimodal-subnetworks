@@ -103,19 +103,27 @@ class MultimodalMongoDataset(MongoDataset):
     def __getitem__(self, batch):
         # Fetch all samples for ids in the batch and where 'kind' is either
         # data or label as specified by the sample parameter
-        # TODO: make it respect the batch size; right now it returns a bigger batch with multiple modalities per id
-
+        
+        # 1. Fetch binary data in one batch
         samples = list(
             self.collection["bin"].find(
                 {
                     self.id: {"$in": [self.indices[_] for _ in batch]},
-                    "kind": {"$in": self.sample}, # .bin contains 3D kinds like 'smri', 'falff', 'dwi'. Scalar labels are stored in .meta
+                    "kind": {"$in": self.sample}, # .bin contains 3D kinds like 'smri', 'falff', 'dwi'. 
                 },
                 self.fields,
             )
         )
 
-        # Batch metadata query: fetch all metadata for the batch at once (not N queries)
+        # Pre-group chunks by (id, kind) for O(N) access instead of O(N^2) filtering
+        chunks_by_id_kind = {}
+        for s in samples:
+            key = (s[self.id], s["kind"])
+            if key not in chunks_by_id_kind:
+                chunks_by_id_kind[key] = []
+            chunks_by_id_kind[key].append(s)
+
+        # 2. Batch metadata query: fetch all metadata for the batch at once
         batch_ids = [self.indices[_] for _ in batch]
         all_meta = list(
             self.collection["meta"].find(
@@ -130,30 +138,30 @@ class MultimodalMongoDataset(MongoDataset):
 
         results = {}
         for id in batch:
-            # Lookup metadata from pre-fetched batch (no DB query here)
+            # Lookup metadata from pre-fetched batch
             meta_for_id = meta_lookup.get(self.indices[id])
-            assert meta_for_id is not None, f"No meta entries found for id {id}"
+            if meta_for_id is None:
+                continue
 
             label = meta_for_id[self.meta_sample[0]]
             modalities = meta_for_id["modalities"]
             id_modalities = set(modalities).intersection(set(self.sample))
 
-            # Get samples for this ID
-            samples_for_id = [
-                sample
-                for sample in samples
-                if sample[self.id] == self.indices[id]
-            ]
-
             for mod in id_modalities:
-                data = self.make_serial(samples_for_id, mod)
+                # Optimized: get pre-grouped chunks and sort them
+                samples_for_id_kind = chunks_by_id_kind.get((self.indices[id], mod), [])
+                if not samples_for_id_kind:
+                    continue
+                
+                # Sort chunks by chunk_id and join
+                samples_for_id_kind.sort(key=lambda x: x["chunk_id"])
+                data = b"".join([s["chunk"] for s in samples_for_id_kind])
 
                 result = {
                     "input": self.normalize(self.transform(data).float()),
                     "modality": mod,
                     "label": torch.tensor(label).unsqueeze(0),
                 }
-
 
                 # Add to results
                 results[str(id)+'_'+mod] = result

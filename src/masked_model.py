@@ -39,6 +39,20 @@ class MultiMaskSNIPWrapper(nn.Module):
         self.model = model
         self.sparsity = sparsity
         self.masks_registered = False
+        # Cache for parametrized modules to avoid CPU-heavy model.modules() iterations
+        self._parametrized_modules = None
+
+    def _get_parametrized_modules(self):
+        """Lazy-loaded cache of modules that have MultimodalSNIPMask parametrizations."""
+        if self._parametrized_modules is None:
+            self._parametrized_modules = []
+            for module in self.model.modules():
+                if parametrize.is_parametrized(module, "weight"):
+                    for param_module in module.parametrizations.weight:
+                        if isinstance(param_module, MultimodalSNIPMask):
+                            self._parametrized_modules.append(param_module)
+                            break # Found our SNIP mask for this layer
+        return self._parametrized_modules
 
     def register_multimodal_masks(self, modalities, input_data, labels, sub_batch_size=4):
         """
@@ -94,6 +108,7 @@ class MultiMaskSNIPWrapper(nn.Module):
                     parametrize.register_parametrization(module, "weight", snip_mask_module)
 
         self.masks_registered = True
+        self._parametrized_modules = None # Reset cache after registration
 
         # Cleanup to free GPU memory
         del temp_model
@@ -115,18 +130,28 @@ class MultiMaskSNIPWrapper(nn.Module):
         # Output container (Assuming Binary Classification [B, 1])
         final_outputs = torch.zeros(batch_size, 1, device=device) 
         
-        unique_mods = torch.unique(modalities).cpu().tolist()
-
-        for mod in unique_mods:
-            mod_idx = (modalities == mod)
-            sub_data = input_data[mod_idx]
-            
-            # A. Set the Active Modality
+        unique_mods = torch.unique(modalities)
+        
+        # If all samples have the same modality, we can skip the loop and slicing
+        if unique_mods.numel() == 1:
+            mod = unique_mods.item()
             self._set_active_modality(mod)
-            
-            # B. Forward Pass (Autograd tracks: output = weight * mask_mod)
-            sub_output = self.model(sub_data)
-            final_outputs[mod_idx] = sub_output
+            return self.model(input_data)
+
+        # Mixed modalities: process each group
+        # Use parametrize.cached() to avoid redundant property lookups within sub-batches
+        with parametrize.cached():
+            for mod_tensor in unique_mods:
+                mod = mod_tensor.item()
+                mod_idx = (modalities == mod)
+                sub_data = input_data[mod_idx]
+                
+                # A. Set the Active Modality (now optimized with cached list)
+                self._set_active_modality(mod)
+                
+                # B. Forward Pass
+                sub_output = self.model(sub_data)
+                final_outputs[mod_idx] = sub_output
             
         # C. Reset to Identity (No mask)
         self._set_active_modality(None)
@@ -134,12 +159,10 @@ class MultiMaskSNIPWrapper(nn.Module):
         return final_outputs
 
     def _set_active_modality(self, mod_id):
-        """Iterates over modules to toggle the active mask state."""
-        for module in self.model.modules():
-            if parametrize.is_parametrized(module, "weight"):
-                for param_module in module.parametrizations.weight:
-                    if isinstance(param_module, MultimodalSNIPMask):
-                        param_module.active_mod_id = mod_id
+        """Iterates over cached SNIP mask modules to toggle the active mask state."""
+        # This used to iterate over ALL modules; now uses cached list of relevant modules
+        for param_module in self._get_parametrized_modules():
+            param_module.active_mod_id = mod_id
 
     def prepare_for_loading(self, modalities_list):
         """
@@ -162,6 +185,7 @@ class MultiMaskSNIPWrapper(nn.Module):
                 parametrize.register_parametrization(module, "weight", snip_mask_module)
         
         self.masks_registered = True
+        self._parametrized_modules = None # Reset cache after structural change
 
     # --- INTERNAL SNIP HELPERS ---
     def _generate_mask_from_grad_scores_batched(self, model, optimizer, data, labels, target_device, sub_batch_size=4):

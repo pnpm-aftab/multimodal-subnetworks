@@ -28,7 +28,6 @@ from src.db_client import ClientCreator
 from src.customMongoDataset import CustomMongoDataset, MultimodalMongoDataset, multimodal_collate, make_serial
 from src.masked_model import MultiMaskSNIPWrapper
 from src.utils import setup_distributed_port
-from src.modality_sampler import ModalitySpecificSampler
 
 SEED = random.randint(0, 9999)
 utils.set_global_seed(SEED)
@@ -248,26 +247,13 @@ class CustomRunner(dl.Runner):
             normalize=unit_interval_normalize,
             id=self.index_id,
         )
-        # Choose sampler based on configuration and multimodal setting
-        if self.multimodal and self._hparams["experiment"].get("use_modality_specific_batching", True):
-            # NEW: Modality-specific batching for 2-3× speedup
-            print("Using ModalitySpecificSampler for optimized multimodal training")
-            train_sampler = ModalitySpecificSampler(
-                train_dataset,
-                batch_size=self.num_volumes,
-                shuffle=True,
-                seed=SEED,
-                db_host=self.db_host + ":27017",
-                db_name=self.db_name,
-                db_collection=self.db_collection,
-            )
-        else:
-            # LEGACY: Mixed-modality batching
-            train_sampler = (
-                DBBatchSampler(train_dataset, batch_size=self.num_volumes, seed=SEED)
-                if self.engine.is_ddp
-                else DBBatchSampler(train_dataset, batch_size=self.num_volumes)
-            )
+        
+        # Use standard DBBatchSampler for mixed-modality batches (cross-modality competition)
+        train_sampler = (
+            DBBatchSampler(train_dataset, batch_size=self.num_volumes, seed=SEED)
+            if self.engine.is_ddp
+            else DBBatchSampler(train_dataset, batch_size=self.num_volumes)
+        )
         
         train_dataloader = BatchPrefetchLoaderWrapper(
             DataLoader(
@@ -295,26 +281,13 @@ class CustomRunner(dl.Runner):
             id=self.index_id,
         )
         
-        # Choose sampler for validation
-        if self.multimodal and self._hparams["experiment"].get("use_modality_specific_batching", True):
-            print("Using ModalitySpecificSampler for validation")
-            valid_sampler = ModalitySpecificSampler(
-                valid_dataset,
-                batch_size=self.num_volumes,
-                shuffle=False,  # No shuffle for validation
-                seed=SEED,
-                db_host=self.db_host + ":27017",
-                db_name=self.db_name,
-                db_collection=self.db_collection,
+        valid_sampler = (
+            DBBatchSampler(valid_dataset, batch_size=self.num_volumes, seed=SEED)
+            if self.engine.is_ddp
+            else DBBatchSampler(
+                valid_dataset, batch_size=self.num_volumes, seed=SEED
             )
-        else:
-            valid_sampler = (
-                DBBatchSampler(valid_dataset, batch_size=self.num_volumes, seed=SEED)
-                if self.engine.is_ddp
-                else DBBatchSampler(
-                    valid_dataset, batch_size=self.num_volumes, seed=SEED
-                )
-            )
+        )
         
         valid_dataloader = BatchPrefetchLoaderWrapper(
             DataLoader(
@@ -369,54 +342,60 @@ class CustomRunner(dl.Runner):
     def get_snip_data(self, posts_bin, posts_meta, snip_ids):
         snip_dict = {}
 
+        # 1. Fetch all binary data for SNIP in one batch
         snip_samples = list(
             posts_bin.find(
                 {
                     "id": {"$in": snip_ids},
-                    "kind": {"$in": self.db_fields}, # .bin contains 3D kinds like 'smri', 'falff', 'dwi'. Scalar labels are stored in .meta
+                    "kind": {"$in": self.db_fields}, 
                 },
                 {"id": 1, "chunk": 1, "kind": 1, "chunk_id": 1},
             )
         )
 
+        # Pre-group chunks by (id, kind) for O(N) access
+        chunks_by_id_kind = {}
+        for s in snip_samples:
+            key = (s["id"], s["kind"])
+            if key not in chunks_by_id_kind:
+                chunks_by_id_kind[key] = []
+            chunks_by_id_kind[key].append(s)
+
+        # 2. Fetch all metadata for SNIP in one batch
+        all_meta = list(
+            posts_meta.find(
+                {"id": {"$in": snip_ids}},
+                list(self.meta_fields) + ["modalities", "id"],
+            )
+        )
+        meta_lookup = {meta["id"]: meta for meta in all_meta}
+
         for id in snip_ids:
             # get ID's label and modalities
-            meta_for_id = list(
-                posts_meta.find(
-                    {
-                        "id": id,
-                    },
-                    list(self.meta_fields) + ["modalities"],
-                )
-            )
+            meta_for_id = meta_lookup.get(id)
+            if meta_for_id is None:
+                continue
 
-            assert len(meta_for_id) != 0, f"No meta entries found for id {id}"
-            assert len(meta_for_id) < 2, f"More than one meta entry found for id {id}"
-
-            label = meta_for_id[0][self.meta_fields[0]]
-            modalities = meta_for_id[0]["modalities"]
+            label = meta_for_id[self.meta_fields[0]]
+            modalities = meta_for_id["modalities"]
             id_modalities = set(modalities).intersection(set(self.db_fields))
 
-            # Get samples for this ID
-            samples_for_id = [
-                sample
-                for sample in snip_samples
-                if sample["id"] == id
-            ]
-
             for mod in id_modalities:
-                data = make_serial(samples_for_id, mod)
+                # Optimized: get pre-grouped chunks and sort them
+                samples_for_id_kind = chunks_by_id_kind.get((id, mod), [])
+                if not samples_for_id_kind:
+                    continue
+                
+                samples_for_id_kind.sort(key=lambda x: x["chunk_id"])
+                data = b"".join([s["chunk"] for s in samples_for_id_kind])
 
-                for mod in id_modalities:
-                    data = make_serial(samples_for_id, mod)
+                result = {
+                    "input": unit_interval_normalize(self.funcs["mytransform"](data).float()),
+                    "modality": mod,
+                    "label": torch.tensor(label).unsqueeze(0),
+                }
 
-                    result = {
-                        "input": unit_interval_normalize(self.funcs["mytransform"](data).float()),
-                        "modality": mod,
-                        "label": torch.tensor(label).unsqueeze(0),
-                    }
-
-                    snip_dict[str(id)+'_'+mod] = result
+                snip_dict[str(id)+'_'+mod] = result
 
         return multimodal_collate({0:snip_dict}) # dict is expected in collate
 
