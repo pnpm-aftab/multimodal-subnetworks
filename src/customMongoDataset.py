@@ -79,11 +79,7 @@ class MultimodalMongoDataset(MongoDataset):
     """
     MultimodalMongoDataset is designed to work with the new "MindfulTensors" databasde organization.
     Gender labels there are stored in the .meta collection, while the 3D image data is stored in the .bin collection.
-    
-    UPDATED FOR MODALITY-SPECIFIC BATCHING:
-    Now supports efficient modality-homogeneous batches when used with ModalitySpecificSampler.
-    Each batch contains samples from a single modality, eliminating sequential forward passes.
-    
+    This class is designed to fetch SINGLE OR MULTIPLE MODALITIES, MODALITY CODE, and SINGLE LABEL.
     Modality codes are assigned using the following dictionary:
     modality_mapping = {
         "smri": 0,
@@ -105,107 +101,21 @@ class MultimodalMongoDataset(MongoDataset):
         self.meta_sample = meta_sample
 
     def __getitem__(self, batch):
-        """
-        Fetch samples for a batch.
-        
-        Args:
-            batch: List of tuples (dataset_idx, modality) for modality-specific sampling
-                   or list of dataset indices for legacy mixed-modality sampling
-        
-        Returns:
-            dict: {batch_idx: {"input": tensor, "modality": str, "label": tensor}}
-        """
-        # Detect if batch contains (idx, modality) tuples (new format) or just indices (legacy)
-        is_modality_specific = len(batch) > 0 and isinstance(batch[0], (tuple, list))
-        
-        if is_modality_specific:
-            return self._get_modality_specific_batch(batch)
-        else:
-            return self._get_mixed_modality_batch(batch)
-    
-    def _get_modality_specific_batch(self, batch):
-        """
-        NEW: Modality-specific batching for optimal performance.
-        Each batch contains samples from a single modality.
-        
-        Args:
-            batch: List of (dataset_idx, modality) tuples
-        """
-        # Extract dataset indices and modality
-        dataset_indices = [item[0] for item in batch]
-        target_modality = batch[0][1]  # All samples in batch should have same modality
-        
-        # Verify all samples have same modality
-        for _, mod in batch:
-            assert mod == target_modality, f"Modality-specific batch contains mixed modalities: {target_modality} vs {mod}"
-        
-        # Fetch binary data for all subjects in batch
-        samples = list(
-            self.collection["bin"].find(
-                {
-                    self.id: {"$in": [self.indices[_] for _ in dataset_indices]},
-                    "kind": target_modality,  # Single modality query
-                },
-                self.fields,
-            )
-        )
-        
-        # Batch metadata query
-        batch_ids = [self.indices[_] for _ in dataset_indices]
-        all_meta = list(
-            self.collection["meta"].find(
-                {
-                    self.id: {"$in": batch_ids},
-                },
-                self.meta_sample,
-            )
-        )
-        meta_lookup = {meta[self.id]: meta for meta in all_meta}
-        
-        # Build results
-        results = {}
-        for batch_pos, dataset_idx in enumerate(dataset_indices):
-            subject_id = self.indices[dataset_idx]
-            
-            # Get binary data for this subject
-            samples_for_id = [
-                sample for sample in samples if sample[self.id] == subject_id
-            ]
-            data = self.make_serial(samples_for_id, target_modality)
-            
-            # Get label
-            meta_for_id = meta_lookup.get(subject_id)
-            assert meta_for_id is not None, f"No meta entries found for id {subject_id}"
-            label = meta_for_id[self.meta_sample[0]]
-            
-            results[batch_pos] = {
-                "input": self.normalize(self.transform(data).float()),
-                "modality": target_modality,
-                "label": torch.tensor(label).unsqueeze(0),
-            }
-        
-        return results
-    
-    def _get_mixed_modality_batch(self, batch):
-        """
-        LEGACY: Mixed-modality batching (kept for backward compatibility).
-        Returns multiple modalities per subject.
-        
-        Args:
-            batch: List of dataset indices
-        """
-        # Fetch all samples for ids in the batch
+        # Fetch all samples for ids in the batch and where 'kind' is either
+        # data or label as specified by the sample parameter
+        # TODO: make it respect the batch size; right now it returns a bigger batch with multiple modalities per id
+
         samples = list(
             self.collection["bin"].find(
                 {
                     self.id: {"$in": [self.indices[_] for _ in batch]},
-                    "kind": {"$in": self.sample},
+                    "kind": {"$in": self.sample}, # .bin contains 3D kinds like 'smri', 'falff', 'dwi'. Scalar labels are stored in .meta
                 },
                 self.fields,
             )
         )
 
-        # Batch metadata query
+        # Batch metadata query: fetch all metadata for the batch at once (not N queries)
         batch_ids = [self.indices[_] for _ in batch]
         all_meta = list(
             self.collection["meta"].find(
@@ -215,11 +125,12 @@ class MultimodalMongoDataset(MongoDataset):
                 self.meta_sample + ("modalities",),
             )
         )
+        # Create mapping from ID to metadata for fast lookup
         meta_lookup = {meta[self.id]: meta for meta in all_meta}
 
         results = {}
-        for batch_pos, id in enumerate(batch):
-            # Lookup metadata
+        for id in batch:
+            # Lookup metadata from pre-fetched batch (no DB query here)
             meta_for_id = meta_lookup.get(self.indices[id])
             assert meta_for_id is not None, f"No meta entries found for id {id}"
 
@@ -243,41 +154,28 @@ class MultimodalMongoDataset(MongoDataset):
                     "label": torch.tensor(label).unsqueeze(0),
                 }
 
+
                 # Add to results
-                results[str(batch_pos)+'_'+mod] = result
+                results[str(id)+'_'+mod] = result
 
         return results
     
 
 def multimodal_collate(results, field=("input", "modality", "label")):
     """
-    Collate function for MultimodalMongoDataset.
-    
-    Supports both modality-specific batches (new, optimized) and mixed-modality batches (legacy).
-    Works with BatchPrefetchLoaderWrapper.
-    
-    Args:
-        results: List of dicts from MultimodalMongoDataset.__getitem__
-        field: Tuple of field names to extract
-    
-    Returns:
-        tuple: (inputs, modalities, labels)
-            - inputs: Tensor [B, 1, H, W, D]
-            - modalities: Tensor [B] of modality codes
-            - labels: Tensor [B, 1]
+    Use this collate function with BatchPrefetchLoaderWrapper when using MultimodalMongoDataset.
+    It will stack the inputs, modality codes, and labels into tensors properly.
     """
     results = results[0]
-    
-    # Extract data from results dict
+    # Assuming 'results' is your dictionary containing all the data
     input_tensors = [results[id_][field[0]] for id_ in results.keys()]
     modalities = [results[id_][field[1]] for id_ in results.keys()]
     label_tensors = [results[id_][field[2]] for id_ in results.keys()]
-    
-    # Stack into batches
+    # Stack all input tensors into a single tensor
     stacked_inputs = torch.stack(input_tensors)
+    # Stack all label tensors into a single tensor
     stacked_modalities = torch.stack([torch.tensor(map_modality_codes(mod)) for mod in modalities])
     stacked_labels = torch.stack(label_tensors)
-    
     return stacked_inputs.unsqueeze(1), stacked_modalities.long(), stacked_labels.long()
 
 def map_modality_codes(mod):
