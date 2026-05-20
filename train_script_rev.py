@@ -484,20 +484,7 @@ class CustomRunner(dl.Runner):
         return scheduler
 
     def get_callbacks(self, stage=None):
-        checkpoint_params = {
-            # "sync": False,
-            "save_best": True,
-            "metric_key": "loss",
-            "loader_key": "valid",
-            "minimize": True,
-        }
-        # checkpoint_params = {
-        #     # "sync": False,
-        #     "save_best": True,
-        #     "metric_key": "accuracy",
-        #     "loader_key": "valid",
-        #     "minimize": False,
-        # }
+        checkpoint_params = {}
         if self.model_path:
             checkpoint_params.update({"resume_model": self.model_path})
         return {
