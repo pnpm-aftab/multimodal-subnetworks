@@ -146,7 +146,7 @@ class CustomRunner(dl.Runner):
                 project=self.wandb_project,
                 name=self.wandb_experiment,
                 entity=self.wandb_team,
-                log_batch_metrics=True,
+                # log_batch_metrics=True,
                 # log_epoch_metrics=True,
             ),
         }
