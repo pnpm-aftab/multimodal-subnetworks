@@ -167,7 +167,7 @@ class CustomRunner(dl.Runner):
         utils.set_global_seed(SEED)
         return SEED
 
-    def get_stage_len(self) -> int:
+    def get_stage_len(self, stage=None) -> int:
         return self.n_epochs
 
     def get_loaders(self):
