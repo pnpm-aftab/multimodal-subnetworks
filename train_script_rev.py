@@ -170,7 +170,7 @@ class CustomRunner(dl.Runner):
     def get_stage_len(self, stage=None) -> int:
         return self.n_epochs
 
-    def get_loaders(self):
+    def get_loaders(self, stage=None):
         #MM
         self.multimodal = True if (len(self.db_fields) > 1 or self.masked) else False
 
