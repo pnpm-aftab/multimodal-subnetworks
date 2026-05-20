@@ -23,6 +23,7 @@ export CUDA_LAUNCH_BLOCKING=1
 export HYDRA_FULL_ERROR=1
 export PYTHONFAULTHANDLER=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
+export WANDB_MODE=offline
 
 dataset="fbirn"
 modality="multimodal"
