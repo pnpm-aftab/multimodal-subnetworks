@@ -109,7 +109,7 @@ class MultimodalMongoDataset(MongoDataset):
             self.collection["bin"].find(
                 {
                     self.id: {"$in": [self.indices[_] for _ in batch]},
-                    "kind": {"$in": self.sample}, # .bin contains 3D kinds like 'smri', 'falff', 'dwi'. 
+                    "kind": {"$in": self.sample}, # .bin contains 3D kinds like 'smri', 'falff', 'dwi'.
                 },
                 self.fields,
             )
@@ -147,15 +147,15 @@ class MultimodalMongoDataset(MongoDataset):
             modalities = meta_for_id["modalities"]
             id_modalities = set(modalities).intersection(set(self.sample))
 
+            # Get samples for this ID (keeping main's sequential approach as requested)
+            samples_for_id = [
+                sample
+                for sample in samples
+                if sample[self.id] == self.indices[id]
+            ]
+
             for mod in id_modalities:
-                # Optimized: get pre-grouped chunks and sort them
-                samples_for_id_kind = chunks_by_id_kind.get((self.indices[id], mod), [])
-                if not samples_for_id_kind:
-                    continue
-                
-                # Sort chunks by chunk_id and join
-                samples_for_id_kind.sort(key=lambda x: x["chunk_id"])
-                data = b"".join([s["chunk"] for s in samples_for_id_kind])
+                data = self.make_serial(samples_for_id, mod)
 
                 result = {
                     "input": self.normalize(self.transform(data).float()),
