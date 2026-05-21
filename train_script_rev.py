@@ -136,7 +136,7 @@ class CustomRunner(dl.Runner):
                 process_group_kwargs={"backend": "nccl"},
             )
         else:
-            return dl.GPUEngine()
+            return dl.DeviceEngine()
 
     def get_loggers(self):
         return {
@@ -167,10 +167,10 @@ class CustomRunner(dl.Runner):
         utils.set_global_seed(SEED)
         return SEED
 
-    def get_stage_len(self) -> int:
+    def get_stage_len(self, stage=None) -> int:
         return self.n_epochs
 
-    def get_loaders(self):
+    def get_loaders(self, stage=None):
         #MM
         self.multimodal = True if (len(self.db_fields) > 1 or self.masked) else False
 
@@ -395,7 +395,7 @@ class CustomRunner(dl.Runner):
 
         return multimodal_collate({0:snip_dict}) # dict is expected in collate
 
-    def get_model(self):
+    def get_model(self, stage=None):
         model = ResNet3D(
             in_channels=1, 
             n_classes=self.n_classes, 
@@ -453,15 +453,15 @@ class CustomRunner(dl.Runner):
 
         return model
 
-    def get_criterion(self):
+    def get_criterion(self, stage=None):
         return torch.nn.BCEWithLogitsLoss()
 
-    def get_optimizer(self, model):
+    def get_optimizer(self, model, stage=None):
         # optimizer = torch.optim.RMSprop(model.parameters(), lr=self.rmsprop_lr)
         optimizer = torch.optim.Adam(model.parameters(), lr=self.onecycle_lr)
         return optimizer
 
-    def get_scheduler(self, optimizer):
+    def get_scheduler(self, optimizer, stage=None):
         scheduler = OneCycleLR(
             optimizer,
             max_lr=self.onecycle_lr,
@@ -472,7 +472,7 @@ class CustomRunner(dl.Runner):
         )
         return scheduler
 
-    def get_callbacks(self):
+    def get_callbacks(self, stage=None):
         checkpoint_params = {
             # "sync": False,
             "save_best": True,
