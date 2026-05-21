@@ -597,14 +597,8 @@ class CustomRunner(dl.Runner):
             # CSV logging: Move to CPU / Numpy
             probs_np = proba_preds.detach().cpu().numpy().flatten()
             targets_np = label.detach().cpu().numpy().flatten()
-            # Handle different Catalyst versions - try different epoch attributes
-            try:
-                epoch_val = self.epoch_step
-            except AttributeError:
-                try:
-                    epoch_val = self.epoch
-                except AttributeError:
-                    epoch_val = self.loader_epoch  # fallback option
+            # Use the correct Catalyst 21.5 attribute name
+            epoch_val = self.stage_epoch_step if hasattr(self, 'stage_epoch_step') else 0
             epochs_np = [epoch_val] * len(probs_np)
             rows = zip(epochs_np, probs_np, targets_np)
             self.csv_writer.writerows(rows)
