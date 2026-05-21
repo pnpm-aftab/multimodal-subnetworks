@@ -173,7 +173,7 @@ class CustomRunner(dl.Runner):
                 process_group_kwargs={"backend": "nccl"},
             )
         else:
-            return dl.GPUEngine()
+            return dl.DeviceEngine()
 
     def get_loggers(self):
         return {
