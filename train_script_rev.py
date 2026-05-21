@@ -474,24 +474,16 @@ class CustomRunner(dl.Runner):
 
     def get_callbacks(self, stage=None):
         checkpoint_params = {
-            # "sync": False,
-            "save_best": True,
+            "save_n_best": 1,
             "metric_key": "loss",
-            "loader_key": "valid",
             "minimize": True,
         }
-        # checkpoint_params = {
-        #     # "sync": False,
-        #     "save_best": True,
-        #     "metric_key": "accuracy",
-        #     "loader_key": "valid",
-        #     "minimize": False,
-        # }
         if self.model_path:
-            checkpoint_params.update({"resume_model": self.model_path})
+            checkpoint_params["resume_model"] = self.model_path
         return {
             "checkpoint": dl.CheckpointCallback(
-                self._logdir, **checkpoint_params
+                logdir=self._logdir,
+                **checkpoint_params
             ),
             "tqdm": dl.TqdmCallback(),
         }
@@ -502,12 +494,20 @@ class CustomRunner(dl.Runner):
             key: metrics.AdditiveValueMetric(compute_on_call=False)
             for key in ["loss", "accuracy", "learning rate"]
         }
-        self.meters["auc"] = metrics.AUCMetric(
-            compute_on_call=False
-        )
+        # AUC metric may have different API in newer Catalyst versions
+        try:
+            self.meters["auc"] = metrics.AUCMetric(compute_on_call=False)
+        except (TypeError, AttributeError):
+            # Fallback for newer Catalyst versions
+            from catalyst.metrics._accuracy import AUCMetric
+            self.meters["auc"] = AUCMetric(compute_on_call=False)
 
         # --- CSV LOGGING SETUP ---
-        rank = distributed.get_rank()
+        try:
+            rank = distributed.get_rank()
+        except AttributeError:
+            # Fallback for newer Catalyst versions
+            rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
         loader_key = self.loader_key # e.g., "train", "valid"
         self.csv_filename = os.path.join(
             self._logdir, 
@@ -613,7 +613,12 @@ class CustomRunner(dl.Runner):
             self.meters[key].update(
                 self.batch_metrics[key].item(), self.batch_size
             )
-        self.meters["auc"].update(proba_preds, label)
+        # AUC metric update - handle different API versions
+        try:
+            self.meters["auc"].update(proba_preds, label)
+        except (TypeError, AttributeError):
+            # Newer Catalyst versions may have different signature
+            self.meters["auc"].update(proba_preds.detach(), label.detach())
 
         del sample
         del label
