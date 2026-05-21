@@ -595,7 +595,7 @@ class CustomRunner(dl.Runner):
             # CSV logging: Move to CPU / Numpy
             probs_np = proba_preds.detach().cpu().numpy().flatten()
             targets_np = label.detach().cpu().numpy().flatten()
-            epochs_np = [self.epoch_step] * len(probs_np)
+            epochs_np = [self.epoch] * len(probs_np)
             rows = zip(epochs_np, probs_np, targets_np)
             self.csv_writer.writerows(rows)
 
