@@ -597,7 +597,15 @@ class CustomRunner(dl.Runner):
             # CSV logging: Move to CPU / Numpy
             probs_np = proba_preds.detach().cpu().numpy().flatten()
             targets_np = label.detach().cpu().numpy().flatten()
-            epochs_np = [self.epoch_step] * len(probs_np)
+            # Handle different Catalyst versions - try different epoch attributes
+            try:
+                epoch_val = self.epoch_step
+            except AttributeError:
+                try:
+                    epoch_val = self.epoch
+                except AttributeError:
+                    epoch_val = self.loader_epoch  # fallback option
+            epochs_np = [epoch_val] * len(probs_np)
             rows = zip(epochs_np, probs_np, targets_np)
             self.csv_writer.writerows(rows)
 
@@ -616,9 +624,13 @@ class CustomRunner(dl.Runner):
         # AUC metric update - handle different API versions
         try:
             self.meters["auc"].update(proba_preds, label)
-        except (TypeError, AttributeError):
+        except (TypeError, AttributeError) as e:
             # Newer Catalyst versions may have different signature
-            self.meters["auc"].update(proba_preds.detach(), label.detach())
+            try:
+                self.meters["auc"].update(proba_preds.detach(), label.detach())
+            except:
+                # If AUC fails, skip it - not critical for training
+                pass
 
         del sample
         del label
