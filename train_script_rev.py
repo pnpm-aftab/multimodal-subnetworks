@@ -136,7 +136,7 @@ class CustomRunner(dl.Runner):
                 process_group_kwargs={"backend": "nccl"},
             )
         else:
-            return dl.DeviceEngine()
+            return dl.GPUEngine()
 
     def get_loggers(self):
         return {
@@ -146,7 +146,7 @@ class CustomRunner(dl.Runner):
                 project=self.wandb_project,
                 name=self.wandb_experiment,
                 entity=self.wandb_team,
-                # log_batch_metrics=True,
+                log_batch_metrics=True,
                 # log_epoch_metrics=True,
             ),
         }
@@ -167,10 +167,10 @@ class CustomRunner(dl.Runner):
         utils.set_global_seed(SEED)
         return SEED
 
-    def get_stage_len(self, stage=None) -> int:
+    def get_stage_len(self) -> int:
         return self.n_epochs
 
-    def get_loaders(self, stage=None):
+    def get_loaders(self):
         #MM
         self.multimodal = True if (len(self.db_fields) > 1 or self.masked) else False
 
@@ -260,14 +260,11 @@ class CustomRunner(dl.Runner):
             normalize=safe_normalize,
             id=self.index_id,
         )
-        
-        # Use standard DBBatchSampler for mixed-modality batches (cross-modality competition)
         train_sampler = (
             DBBatchSampler(train_dataset, batch_size=self.num_volumes, seed=SEED)
             if self.engine.is_ddp
             else DBBatchSampler(train_dataset, batch_size=self.num_volumes)
         )
-        
         train_dataloader = BatchPrefetchLoaderWrapper(
             DataLoader(
                 train_dataset,
@@ -291,7 +288,6 @@ class CustomRunner(dl.Runner):
             normalize=safe_normalize,
             id=self.index_id,
         )
-        
         valid_sampler = (
             DBBatchSampler(valid_dataset, batch_size=self.num_volumes, seed=SEED)
             if self.engine.is_ddp
@@ -299,7 +295,6 @@ class CustomRunner(dl.Runner):
                 valid_dataset, batch_size=self.num_volumes, seed=SEED
             )
         )
-        
         valid_dataloader = BatchPrefetchLoaderWrapper(
             DataLoader(
                 valid_dataset,
@@ -349,64 +344,58 @@ class CustomRunner(dl.Runner):
     def get_snip_data(self, posts_bin, posts_meta, snip_ids):
         snip_dict = {}
 
-        # 1. Fetch all binary data for SNIP in one batch
         snip_samples = list(
             posts_bin.find(
                 {
                     "id": {"$in": snip_ids},
-                    "kind": {"$in": self.db_fields}, 
+                    "kind": {"$in": self.db_fields}, # .bin contains 3D kinds like 'smri', 'falff', 'dwi'. Scalar labels are stored in .meta
                 },
                 {"id": 1, "chunk": 1, "kind": 1, "chunk_id": 1},
             )
         )
 
-        # Pre-group chunks by (id, kind) for O(N) access
-        chunks_by_id_kind = {}
-        for s in snip_samples:
-            key = (s["id"], s["kind"])
-            if key not in chunks_by_id_kind:
-                chunks_by_id_kind[key] = []
-            chunks_by_id_kind[key].append(s)
-
-        # 2. Fetch all metadata for SNIP in one batch
-        all_meta = list(
-            posts_meta.find(
-                {"id": {"$in": snip_ids}},
-                list(self.meta_fields) + ["modalities", "id"],
-            )
-        )
-        meta_lookup = {meta["id"]: meta for meta in all_meta}
-
         for id in snip_ids:
             # get ID's label and modalities
-            meta_for_id = meta_lookup.get(id)
-            if meta_for_id is None:
-                continue
+            meta_for_id = list(
+                posts_meta.find(
+                    {
+                        "id": id,
+                    },
+                    list(self.meta_fields) + ["modalities"],
+                )
+            )
 
-            label = meta_for_id[self.meta_fields[0]]
-            modalities = meta_for_id["modalities"]
+            assert len(meta_for_id) != 0, f"No meta entries found for id {id}"
+            assert len(meta_for_id) < 2, f"More than one meta entry found for id {id}"
+
+            label = meta_for_id[0][self.meta_fields[0]]
+            modalities = meta_for_id[0]["modalities"]
             id_modalities = set(modalities).intersection(set(self.db_fields))
 
+            # Get samples for this ID
+            samples_for_id = [
+                sample
+                for sample in snip_samples
+                if sample["id"] == id
+            ]
+
             for mod in id_modalities:
-                # Optimized: get pre-grouped chunks and sort them
-                samples_for_id_kind = chunks_by_id_kind.get((id, mod), [])
-                if not samples_for_id_kind:
-                    continue
+                data = make_serial(samples_for_id, mod)
 
-                samples_for_id_kind.sort(key=lambda x: x["chunk_id"])
-                data = b"".join([s["chunk"] for s in samples_for_id_kind])
+                for mod in id_modalities:
+                    data = make_serial(samples_for_id, mod)
 
-                result = {
-                    "input": unit_interval_normalize(self.funcs["mytransform"](data).float()),
-                    "modality": mod,
-                    "label": torch.tensor(label).unsqueeze(0),
-                }
+                    result = {
+                        "input": safe_normalize(self.funcs["mytransform"](data).float()),
+                        "modality": mod,
+                        "label": torch.tensor(label).unsqueeze(0),
+                    }
 
-                snip_dict[str(id)+'_'+mod] = result
+                    snip_dict[str(id)+'_'+mod] = result
 
         return multimodal_collate({0:snip_dict}) # dict is expected in collate
 
-    def get_model(self, stage=None):
+    def get_model(self):
         model = ResNet3D(
             in_channels=1, 
             n_classes=self.n_classes, 
@@ -464,15 +453,15 @@ class CustomRunner(dl.Runner):
 
         return model
 
-    def get_criterion(self, stage=None):
+    def get_criterion(self):
         return torch.nn.BCEWithLogitsLoss()
 
-    def get_optimizer(self, model, stage=None):
+    def get_optimizer(self, model):
         # optimizer = torch.optim.RMSprop(model.parameters(), lr=self.rmsprop_lr)
         optimizer = torch.optim.Adam(model.parameters(), lr=self.onecycle_lr)
         return optimizer
 
-    def get_scheduler(self, optimizer, stage=None):
+    def get_scheduler(self, optimizer):
         scheduler = OneCycleLR(
             optimizer,
             max_lr=self.onecycle_lr,
@@ -483,8 +472,21 @@ class CustomRunner(dl.Runner):
         )
         return scheduler
 
-    def get_callbacks(self, stage=None):
-        checkpoint_params = {}
+    def get_callbacks(self):
+        checkpoint_params = {
+            # "sync": False,
+            "save_best": True,
+            "metric_key": "loss",
+            "loader_key": "valid",
+            "minimize": True,
+        }
+        # checkpoint_params = {
+        #     # "sync": False,
+        #     "save_best": True,
+        #     "metric_key": "accuracy",
+        #     "loader_key": "valid",
+        #     "minimize": False,
+        # }
         if self.model_path:
             checkpoint_params.update({"resume_model": self.model_path})
         return {
@@ -595,7 +597,7 @@ class CustomRunner(dl.Runner):
             # CSV logging: Move to CPU / Numpy
             probs_np = proba_preds.detach().cpu().numpy().flatten()
             targets_np = label.detach().cpu().numpy().flatten()
-            epochs_np = [self.epoch] * len(probs_np)
+            epochs_np = [self.epoch_step] * len(probs_np)
             rows = zip(epochs_np, probs_np, targets_np)
             self.csv_writer.writerows(rows)
 
