@@ -473,13 +473,13 @@ class CustomRunner(dl.Runner):
         return scheduler
 
     def get_callbacks(self, stage=None):
-        checkpoint_params = {
-            "save_n_best": 1,
-            "metric_key": "loss",
-            "minimize": True,
-        }
+        # Minimal CheckpointCallback to avoid API issues
+        checkpoint_params = {}
+        
+        # Only add parameters that are essential
         if self.model_path:
             checkpoint_params["resume_model"] = self.model_path
+            
         return {
             "checkpoint": dl.CheckpointCallback(
                 logdir=self._logdir,

@@ -13,10 +13,10 @@ MONGO_HOST = "10.245.12.58"
 DB_NAME = "multimodalSubnetworks"
 BIN_COLLECTION = "ukb.bin"
 META_COLLECTION = "ukb.meta"
-FALFF_DIR = "/data/users2/jwardell1/multimodal-subnetworks/groupedData/ukb_falff/images/conformed"
-SMRI_DIR = "/data/users2/jwardell1/multimodal-subnetworks/groupedData/ukb_smri/images/conformed"
-DWI_DIR = "/data/users2/jwardell1/multimodal-subnetworks/groupedData/ukb_dwi/images/conformed"
-DEMOGRAPHICS_CSV = "/data/users2/jwardell1/multimodal-subnetworks/prep/my_ukb_data.csv"
+FALFF_DIR = "/data/users2/maftab1/multimodal-subnetworks/groupedData/ukb_falff/images/conformed"
+SMRI_DIR = "/data/users2/maftab1/multimodal-subnetworks/groupedData/ukb_smri/images/conformed"
+DWI_DIR = "/data/users2/maftab1/multimodal-subnetworks/groupedData/ukb_dwi/images/conformed"
+DEMOGRAPHICS_CSV = "/data/users2/maftab1/multimodal-subnetworks/prep/my_ukb_data.csv"
 CHUNK_SIZE_MB = 10
 
 def qnormalize(img, qmin=0.01, qmax=0.99):

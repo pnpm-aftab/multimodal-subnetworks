@@ -6,8 +6,8 @@ function compute_falff(dataset)
     addpath(genpath('REST_V1.8_130615')); % Ensure REST toolbox is in your PWD
 
     % Define base directories
-    base_dir = '/data/users2/jwardell1/nshor_docker/examples';
-    output_dir = fullfile('/data/users2/jwardell1/multimodal-subnetworks/groupedData', [lower(dataset) '_falff'], 'images');
+    base_dir = '/data/users2/maftab1/nshor_docker/examples';
+    output_dir = fullfile('/data/users2/maftab1/multimodal-subnetworks/groupedData', [lower(dataset) '_falff'], 'images');
 
     % Define dataset-specific paths
     dataset_lower = lower(dataset); % Convert dataset name to lowercase

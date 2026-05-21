@@ -14,7 +14,7 @@ DATASET_NAME_LOWER=$(echo "$DATASET_NAME" | tr '[:upper:]' '[:lower:]')
 DATASET_NAME_UPPER=$(echo "$DATASET_NAME" | tr '[:lower:]' '[:upper:]')
 
 # Base directories
-BASE_DIR="/data/users2/jwardell1/multimodal-subnetworks/groupedData"
+BASE_DIR="/data/users2/maftab1/multimodal-subnetworks/groupedData"
 SUBJECTS_FILE="subjects.txt"
 
 # Source directories
