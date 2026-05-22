@@ -11,6 +11,9 @@
 #SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/ukb_test-%j.out
 #SBATCH -A psy53c17
 
+# see how cores/num_workers affects the performance and utilization
+# multi gpu tranining with 
+
 sleep 10s
 echo "Running on host: $HOSTNAME" >&2
 echo "Job ID: $SLURM_JOB_ID" >&2
@@ -23,7 +26,7 @@ export CUDA_LAUNCH_BLOCKING=1
 export HYDRA_FULL_ERROR=1
 export PYTHONFAULTHANDLER=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
-export WANDB_MODE=offline
+export WANDB_MODE=online
 
 dataset="ukb"
 modality="multimodal"

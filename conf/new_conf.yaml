@@ -57,8 +57,9 @@ experiment:
   dbfields: ["smri"]
   metafields: ["gender_encoded"]
   epochs: 5
+  # try different numbers for prefetches and num_workers
   prefetches: 4
-  num_workers: 8
+  num_workers: 4
   attenuates: 0.8
 
 resnet_specific:
