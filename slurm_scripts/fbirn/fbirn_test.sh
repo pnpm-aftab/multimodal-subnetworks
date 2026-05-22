@@ -6,9 +6,9 @@
 #SBATCH -p qTRDGPUH
 #SBATCH -t 1800
 #SBATCH --gres=gpu:A100:1
-#SBATCH -J fbirn_test
+#SBATCH -J ukb_test
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
-#SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_test-%j.out
+#SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/ukb_test-%j.out
 #SBATCH -A psy53c17
 
 sleep 10s
@@ -25,7 +25,7 @@ export PYTHONFAULTHANDLER=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export WANDB_MODE=offline
 
-dataset="fbirn"
+dataset="ukb"
 modality="multimodal"
 python3 train_script_rev.py \
     --config-name new_conf \
