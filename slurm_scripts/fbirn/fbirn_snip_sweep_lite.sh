@@ -53,6 +53,7 @@ python3 train_script_fixed_seed.py \
     experiment.epochs=3 \
     experiment.cv_seed=1997 \
     +experiment.fixed_seed=1997 \
+    experiment.numvolumes=3 \
     model.masked=True \
     model.sparsity=${SPARSITY} \
     model.snip_batch_size=${SNIP_BATCH} \
