@@ -4,7 +4,7 @@
 #SBATCH -c 8
 #SBATCH --mem=50g
 #SBATCH -p qTRDGPUH
-#SBATCH -t 1800
+#SBATCH -t 3600
 #SBATCH --gres=gpu:A100:1
 #SBATCH -J fbirn_snip_lite
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
@@ -29,6 +29,7 @@ export HYDRA_FULL_ERROR=1
 export PYTHONFAULTHANDLER=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export WANDB_MODE=online
+export CUDA_VISIBLE_DEVICES=0
 
 # Moderate sweep configuration (6 combinations)
 SPARSITY_VALUES=(0.5 0.5 0.5 0.7 0.7 0.7)
@@ -54,6 +55,7 @@ python3 train_script_fixed_seed.py \
     experiment.cv_seed=1997 \
     +experiment.fixed_seed=1997 \
     experiment.numvolumes=3 \
+    experiment.num_workers=4 \
     model.masked=True \
     model.sparsity=${SPARSITY} \
     model.snip_batch_size=${SNIP_BATCH} \
