@@ -8,9 +8,10 @@
 #SBATCH --gres=gpu:A100:1
 #SBATCH -J fbirn_snip_lite
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
-#SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_snip_lite-%j.out
+#SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_snip_lite-%A_%a.out
+#SBATCH --error=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_snip_lite-%A_%a.err
 #SBATCH -A psy53c17
-#SBATCH --array=0-5
+#SBATCH --array=0-5%2
 
 # Lightweight SNIP sweep similar to fbirn_test.sh
 # Moderate parameter exploration with reduced resources
@@ -51,7 +52,7 @@ python3 train_script_fixed_seed.py \
     experiment.cv_folds=2 \
     experiment.epochs=3 \
     experiment.cv_seed=1997 \
-    experiment.fixed_seed=1997 \
+    +experiment.fixed_seed=1997 \
     model.masked=True \
     model.sparsity=${SPARSITY} \
     model.snip_batch_size=${SNIP_BATCH} \
