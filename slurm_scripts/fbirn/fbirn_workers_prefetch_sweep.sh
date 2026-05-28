@@ -62,7 +62,7 @@ python3 train_script_fixed_seed.py \
     experiment.numvolumes=3 \
     experiment.num_workers=${NUM_WORKERS} \
     experiment.prefetches=${PREFETCHES} \
-    model.masked=True \
+    model.masked=False \
     model.sparsity=0.7 \
     model.snip_batch_size=20 \
     model.model_channels=64 \
