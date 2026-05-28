@@ -12,7 +12,7 @@
 #SBATCH -A psy53c17
 
 # see how cores/num_workers affects the performance and utilization
-# multi gpu tranining with 
+# multi gpu tranining 
 
 sleep 10s
 echo "Running on host: $HOSTNAME" >&2

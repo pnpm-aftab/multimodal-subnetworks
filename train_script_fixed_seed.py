@@ -692,7 +692,10 @@ def main(cfg: DictConfig):
             / 256
         )
         wandb_experiment = (
-            f"{experiment_name}: {collections}, {dbfields}-{metafields}, masked={cfg.model.get('masked', False)}, sps={cfg.model.get('sparsity', None)}"
+            f"{experiment_name} | fold={fold_idx}"
+            f" | nw={num_workers} pf={prefetches}"
+            f" | sps={cfg.model.get('sparsity', None)} sb={cfg.model.get('snip_batch_size', None)}"
+            f" | ep={epochs}"
         )
 
         print(f"Starting fold {fold_idx+1}/{cfg.experiment.cv_folds}")
