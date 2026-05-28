@@ -11,15 +11,14 @@
 #SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_wp_sweep-%A_%a.out
 #SBATCH --error=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_wp_sweep-%A_%a.err
 #SBATCH -A psy53c17
-#SBATCH --array=0-17%6
+#SBATCH --array=0-8%6
 
 # Sweep num_workers x prefetches to measure throughput and utilization.
 # Best model config fixed: sparsity=0.7, snip_batch=20, 10 epochs.
-# 9 combos x 2 folds = 18 array jobs.
+# 9 combos, both folds run sequentially inside each job's fold loop.
 # -c 12 covers the nw=8 case (8 workers + main process + overhead).
 #
-# Layout: task_id 0-8 = fold 0, task_id 9-17 = fold 1
-#         combo_idx = task_id % 9
+# Layout: task_id = combo_idx
 #         num_workers: 2,2,2, 4,4,4, 8,8,8
 #         prefetches:  2,4,8, 2,4,8, 2,4,8
 
@@ -41,13 +40,10 @@ export CUDA_VISIBLE_DEVICES=0
 NUM_WORKERS_VALUES=(2 2 2 4 4 4 8 8 8)
 PREFETCH_VALUES=(2 4 8 2 4 8 2 4 8)
 
-COMBO_IDX=$(( SLURM_ARRAY_TASK_ID % 9 ))
-FOLD_IDX=$(( SLURM_ARRAY_TASK_ID / 9 ))
+NUM_WORKERS=${NUM_WORKERS_VALUES[$SLURM_ARRAY_TASK_ID]}
+PREFETCHES=${PREFETCH_VALUES[$SLURM_ARRAY_TASK_ID]}
 
-NUM_WORKERS=${NUM_WORKERS_VALUES[$COMBO_IDX]}
-PREFETCHES=${PREFETCH_VALUES[$COMBO_IDX]}
-
-echo "Fold ${FOLD_IDX} | num_workers=${NUM_WORKERS}, prefetches=${PREFETCHES}" >&2
+echo "num_workers=${NUM_WORKERS}, prefetches=${PREFETCHES} (both folds run inside training script)" >&2
 
 dataset="fbirn"
 modality="multimodal"

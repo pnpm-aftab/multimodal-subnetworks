@@ -11,9 +11,10 @@
 #SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_snip_e10-%A_%a.out
 #SBATCH --error=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_snip_e10-%A_%a.err
 #SBATCH -A psy53c17
-#SBATCH --array=0-1%2
+#SBATCH --array=0
 
 # Best config from snip_sweep_lite: sparsity=0.7, snip_batch=20, 10 epochs
+# Single job — both folds run sequentially inside the training script's fold loop.
 
 sleep 10s
 echo "Running on host: $HOSTNAME" >&2

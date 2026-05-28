@@ -11,7 +11,7 @@
 #SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_multi_gpu-%A_%a.out
 #SBATCH --error=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_multi_gpu-%A_%a.err
 #SBATCH -A psy53c17
-#SBATCH --array=0-1%2
+#SBATCH --array=0
 
 # Multi-GPU run (2x A100) using the existing DistributedDataParallelEngine in
 # train_script_fixed_seed.py (get_engine() auto-selects DDP when device_count > 1).
