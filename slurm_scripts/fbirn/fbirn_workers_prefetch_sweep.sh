@@ -4,7 +4,7 @@
 #SBATCH -c 12
 #SBATCH --mem=100g
 #SBATCH -p qTRDGPUH
-#SBATCH -t 10800
+#SBATCH -t 180
 #SBATCH --gres=gpu:A100:1
 #SBATCH -J fbirn_wp_sweep
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
