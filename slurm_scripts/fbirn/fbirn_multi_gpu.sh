@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -c 10
-#SBATCH --mem=80g
+#SBATCH -c 12
+#SBATCH --mem=100g
 #SBATCH -p qTRDGPUH
 #SBATCH -t 7200
 #SBATCH --gres=gpu:A100:2
