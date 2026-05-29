@@ -147,15 +147,9 @@ class MultimodalMongoDataset(MongoDataset):
             modalities = meta_for_id["modalities"]
             id_modalities = set(modalities).intersection(set(self.sample))
 
-            # Get samples for this ID (keeping main's sequential approach as requested)
-            samples_for_id = [
-                sample
-                for sample in samples
-                if sample[self.id] == self.indices[id]
-            ]
-
             for mod in id_modalities:
-                data = self.make_serial(samples_for_id, mod)
+                # O(1) lookup using pre-grouped dict instead of O(N) scan
+                data = self.make_serial(chunks_by_id_kind.get((self.indices[id], mod), []), mod)
 
                 result = {
                     "input": self.normalize(self.transform(data).float()),

@@ -4,17 +4,19 @@
 #SBATCH -c 12
 #SBATCH --mem=100g
 #SBATCH -p qTRDGPUH
-#SBATCH -t 7200
+#SBATCH -t 120
 #SBATCH --gres=gpu:A100:1
-#SBATCH -J fbirn_snip_e10
+#SBATCH --nodelist=arctrddgxa004
+#SBATCH -J fbirn_dense_e10
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
-#SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_snip_e10-%A_%a.out
-#SBATCH --error=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_snip_e10-%A_%a.err
+#SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_dense_e10-%A_%a.out
+#SBATCH --error=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_dense_e10-%A_%a.err
 #SBATCH -A psy53c17
 #SBATCH --array=0
 
-# Best config from snip_sweep_lite: sparsity=0.7, snip_batch=20, 10 epochs
-# Single job — both folds run sequentially inside the training script's fold loop.
+# Dense (unmasked) baseline — identical config to SNIP run but masked=False.
+# Compare directly against fbirn_snip_sps07_sb20_e10 results to measure
+# the effect of SNIP masking on accuracy, AUC, and runtime.
 
 sleep 10s
 echo "Running on host: $HOSTNAME" >&2
@@ -30,11 +32,7 @@ export PYTHONFAULTHANDLER=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export WANDB_MODE=online
 export CUDA_VISIBLE_DEVICES=0
-
-# SLURM_ARRAY_TASK_ID maps to fold index (0 or 1)
-FOLD_IDX=$SLURM_ARRAY_TASK_ID
-
-echo "Running fold ${FOLD_IDX} with sparsity=0.7, snip_batch=20, epochs=10" >&2
+export OMP_NUM_THREADS=1
 
 dataset="fbirn"
 modality="multimodal"
@@ -42,7 +40,7 @@ modality="multimodal"
 python3 train_script_fixed_seed.py \
     --config-name new_conf \
     --config-dir conf \
-    experiment.experiment_name=${dataset}_${modality}_snip_sps0.7_sb20_e10 \
+    experiment.experiment_name=${dataset}_${modality}_dense_e10 \
     experiment.collections=$dataset \
     experiment.dbfields=[falff,smri,dwi] \
     experiment.metafields=[gender_encoded] \
@@ -52,7 +50,7 @@ python3 train_script_fixed_seed.py \
     +experiment.fixed_seed=1997 \
     experiment.numvolumes=3 \
     experiment.num_workers=4 \
-    model.masked=True \
+    model.masked=False \
     model.sparsity=0.7 \
     model.snip_batch_size=20 \
     model.model_channels=64 \
