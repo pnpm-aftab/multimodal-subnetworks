@@ -38,6 +38,9 @@ python3 train_script_fixed_seed.py \
     experiment.metafields=[gender_encoded] \
     experiment.cv_folds=2 \
     experiment.epochs=3 \
+    experiment.numvolumes=3 \
+    experiment.num_workers=8 \
+    experiment.prefetches=4 \
     model.masked=False \
     model.model_channels=64
 
