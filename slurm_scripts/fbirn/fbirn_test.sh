@@ -22,6 +22,7 @@ export TMPDIR=/tmp
 source /data/users2/maftab1/miniconda3/bin/activate fbirn-test
 echo "Using python from: $(which python)"
 echo "Conda environment: $CONDA_DEFAULT_ENV"
+export CUDA_VISIBLE_DEVICES=0
 export CUDA_LAUNCH_BLOCKING=1
 export HYDRA_FULL_ERROR=1
 export PYTHONFAULTHANDLER=1

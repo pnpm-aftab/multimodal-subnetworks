@@ -11,7 +11,7 @@
 #SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_snip_lite-%A_%a.out
 #SBATCH --error=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_snip_lite-%A_%a.err
 #SBATCH -A psy53c17
-#SBATCH --array=0-5%2
+#SBATCH --array=0-5%3
 
 # Lightweight SNIP sweep similar to fbirn_test.sh
 # Moderate parameter exploration with reduced resources
@@ -29,7 +29,7 @@ export HYDRA_FULL_ERROR=1
 export PYTHONFAULTHANDLER=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export WANDB_MODE=online
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=$SLURM_JOB_GPUS
 
 # Moderate sweep configuration (6 combinations)
 SPARSITY_VALUES=(0.5 0.5 0.5 0.7 0.7 0.7)
