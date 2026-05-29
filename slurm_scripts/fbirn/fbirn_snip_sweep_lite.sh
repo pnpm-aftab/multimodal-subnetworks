@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -c 8
+#SBATCH -c 24
 #SBATCH --mem=50g
 #SBATCH -p qTRDGPUH
 #SBATCH -t 3600
@@ -11,7 +11,7 @@
 #SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_snip_lite-%A_%a.out
 #SBATCH --error=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_snip_lite-%A_%a.err
 #SBATCH -A psy53c17
-#SBATCH --array=0-5%3
+#SBATCH --array=0-5
 
 # Lightweight SNIP sweep similar to fbirn_test.sh
 # Moderate parameter exploration with reduced resources
@@ -24,12 +24,10 @@ export TMPDIR=/tmp
 source /data/users2/maftab1/miniconda3/bin/activate fbirn-test
 echo "Using python from: $(which python)"
 echo "Conda environment: $CONDA_DEFAULT_ENV"
-export CUDA_LAUNCH_BLOCKING=1
 export HYDRA_FULL_ERROR=1
 export PYTHONFAULTHANDLER=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export WANDB_MODE=online
-export CUDA_VISIBLE_DEVICES=$SLURM_JOB_GPUS
 
 # Moderate sweep configuration (6 combinations)
 SPARSITY_VALUES=(0.5 0.5 0.5 0.7 0.7 0.7)

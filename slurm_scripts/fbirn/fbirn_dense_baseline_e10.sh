@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -c 12
+#SBATCH -c 24
 #SBATCH --mem=100g
 #SBATCH -p qTRDGPUH
 #SBATCH -t 120
@@ -26,12 +26,10 @@ export TMPDIR=/tmp
 source /data/users2/maftab1/miniconda3/bin/activate fbirn-test
 echo "Using python from: $(which python)"
 echo "Conda environment: $CONDA_DEFAULT_ENV"
-export CUDA_LAUNCH_BLOCKING=1
 export HYDRA_FULL_ERROR=1
 export PYTHONFAULTHANDLER=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export WANDB_MODE=online
-export CUDA_VISIBLE_DEVICES=0
 export OMP_NUM_THREADS=1
 
 dataset="fbirn"
