@@ -548,6 +548,12 @@ class CustomRunner(dl.Runner):
         else:
             sample, label = batch
 
+        device = self.engine.device
+        sample = sample.to(device, non_blocking=True)
+        label = label.to(device, non_blocking=True)
+        if self.multimodal:
+            modality = modality.to(device, non_blocking=True)
+
         # run model forward/backward pass
         if self.model.training:
             if self.bit16:

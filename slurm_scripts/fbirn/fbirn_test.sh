@@ -30,7 +30,7 @@ export WANDB_MODE=online
 
 dataset="fbirn"
 modality="multimodal"
-python3 train_script_rev.py \
+python3 train_script_fixed_seed.py \
     --config-name new_conf \
     --config-dir conf \
     experiment.experiment_name=${dataset}_${modality}_test \
