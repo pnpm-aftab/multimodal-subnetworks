@@ -11,7 +11,7 @@
 #SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_wp_sweep-%A_%a.out
 #SBATCH --error=/data/users2/maftab1/multimodal-subnetworks/_out/fbirn_wp_sweep-%A_%a.err
 #SBATCH -A psy53c17
-#SBATCH --array=0-8%6
+#SBATCH --array=0-8%3
 
 # Sweep num_workers x prefetches to measure throughput and utilization.
 # Best model config fixed: sparsity=0.7, snip_batch=20, 10 epochs.
