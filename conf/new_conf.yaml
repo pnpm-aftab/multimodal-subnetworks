@@ -51,6 +51,8 @@ experiment:
   metafields: ["gender_encoded"]
   epochs: 60
   prefetches: 16
+  num_workers: 12
+  prefetch_factor: 4
   attenuates: 0.8
 
 resnet_specific:

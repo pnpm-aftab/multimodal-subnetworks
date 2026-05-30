@@ -74,6 +74,8 @@ class CustomRunner(dl.Runner):
         meta_fields: tuple,
         groupnorm=False,
         prefetches=8,
+        num_workers=6,
+        prefetch_factor=2,
         volume_shape=[256] * 3,
         subvolume_shape=[256] * 3,
         lowprecision=False,
@@ -94,6 +96,8 @@ class CustomRunner(dl.Runner):
         self.validation_percent = validation_percent
         self.rmsprop_lr = rmsprop_lr
         self.prefetches = prefetches
+        self.num_workers = num_workers
+        self.prefetch_factor = prefetch_factor
 
         self.db_host = db_host
         self.db_name = db_name
@@ -120,7 +124,9 @@ class CustomRunner(dl.Runner):
         self.masked = self._hparams["model"].get("masked", False)
 
     def get_engine(self):
-        if torch.cuda.device_count() > 1:
+        # Use SLURM-allocated GPU count, not total visible GPUs on the node
+        n_gpus = int(os.environ.get("SLURM_GPUS_ON_NODE", torch.cuda.device_count()))
+        if n_gpus > 1:
             return dl.DistributedDataParallelEngine(
                 # mixed_precision="fp16",
                 # ddp_kwargs={"backend": "nccl"},
@@ -137,8 +143,6 @@ class CustomRunner(dl.Runner):
                 project=self.wandb_project,
                 name=self.wandb_experiment,
                 entity=self.wandb_team,
-                log_batch_metrics=True,
-                # log_epoch_metrics=True,
             ),
         }
 
@@ -263,8 +267,8 @@ class CustomRunner(dl.Runner):
                 pin_memory=True,
                 worker_init_fn=self.funcs["createclient"],
                 persistent_workers=True,
-                prefetch_factor=2,
-                num_workers=6,  # self.prefetches,
+                prefetch_factor=self.prefetch_factor,
+                num_workers=self.num_workers,
                 # prefetch_factor=None,
                 # num_workers=1,  # self.prefetches,
             ),
@@ -299,8 +303,8 @@ class CustomRunner(dl.Runner):
                 persistent_workers=True,
                 # prefetch_factor=4,
                 # num_workers=4,  # self.prefetches,
-                prefetch_factor=2,
-                num_workers=6,  # self.prefetches,
+                prefetch_factor=self.prefetch_factor,
+                num_workers=self.num_workers,
             ),
             num_prefetches=self.prefetches,
         )
@@ -331,8 +335,8 @@ class CustomRunner(dl.Runner):
                 persistent_workers=True,
                 # prefetch_factor=4,
                 # num_workers=4,  # self.prefetches,
-                prefetch_factor=2,
-                num_workers=6,  # self.prefetches,
+                prefetch_factor=self.prefetch_factor,
+                num_workers=self.num_workers,
             ),
             num_prefetches=self.prefetches,
         )
@@ -618,6 +622,8 @@ def main(cfg: DictConfig):
     metafields = tuple(cfg.experiment.metafields)
     epochs = cfg.experiment.epochs
     prefetches = cfg.experiment.prefetches
+    num_workers = cfg.experiment.num_workers
+    prefetch_factor = cfg.experiment.prefetch_factor
     attenuates = cfg.experiment.attenuates
 
     # we need oneCycleLR, but not the rest of the curiculum
@@ -678,6 +684,8 @@ def main(cfg: DictConfig):
             client_creator=client_creator,
             off_brain_weight=weights,
             prefetches=prefetches,
+            num_workers=num_workers,
+            prefetch_factor=prefetch_factor,
             indexid=cfg.mongo.index_id,
             db_collection=collections,
             db_name=databases,
