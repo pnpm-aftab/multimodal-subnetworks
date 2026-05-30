@@ -31,7 +31,8 @@ python3 train_script_rev.py \
     experiment.metafields=[gender_encoded] \
     model.masked=False \
     model.model_channels=64 \
-    experiment.numvolumes=4
+    experiment.numvolumes=4 \
+    experiment.num_workers=20
 
 sleep 10s
 echo "Job $SLURM_JOB_ID completed"
