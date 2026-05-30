@@ -85,10 +85,10 @@ class MultiMaskSNIPWrapper(nn.Module):
             mod_data = input_data[mask_idx]
             mod_labels = labels[mask_idx]
 
-            # Calculate scores using sub-batches to manage VRAM
-            masks_by_name = self._generate_mask_from_grad_scores_batched(
-                temp_model, temp_optimizer, mod_data, mod_labels,
-                target_device, sub_batch_size=sub_batch_size
+            # Calculate scores using single forward pass (main branch logic)
+            batch = (mod_data.to(target_device), mod_labels.to(target_device))
+            masks_by_name = self._generate_mask_from_grad_scores(
+                temp_model, temp_optimizer, batch, target_device
             )
             temp_mask_storage[mod] = masks_by_name
 
@@ -131,29 +131,18 @@ class MultiMaskSNIPWrapper(nn.Module):
         final_outputs = torch.zeros(batch_size, 1, device=device) 
         
         unique_mods = torch.unique(modalities)
-        
-        # If all samples have the same modality, we can skip the loop and slicing
-        if unique_mods.numel() == 1:
-            mod = unique_mods.item()
-            self._set_active_modality(mod)
-            return self.model(input_data)
 
-        # Mixed modalities: process each group
-        # Use parametrize.cached() to avoid redundant property lookups within sub-batches
         with parametrize.cached():
             for mod_tensor in unique_mods:
                 mod = mod_tensor.item()
                 mod_idx = (modalities == mod)
                 sub_data = input_data[mod_idx]
-                
-                # A. Set the Active Modality (now optimized with cached list)
+
                 self._set_active_modality(mod)
-                
-                # B. Forward Pass
                 sub_output = self.model(sub_data)
                 final_outputs[mod_idx] = sub_output
-            
-        # C. Reset to Identity (No mask)
+
+        # Reset to Identity (No mask)
         self._set_active_modality(None)
         
         return final_outputs
