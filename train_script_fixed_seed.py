@@ -265,7 +265,7 @@ class CustomRunner(dl.Runner):
         train_dataloader = BatchPrefetchLoaderWrapper(
             DataLoader(
                 train_dataset,
-                sampler=train_sampler,
+                batch_sampler=train_sampler,
                 collate_fn=self.collate,
                 pin_memory=False,
                 worker_init_fn=self.funcs["createclient"],
@@ -294,7 +294,7 @@ class CustomRunner(dl.Runner):
         valid_dataloader = BatchPrefetchLoaderWrapper(
             DataLoader(
                 valid_dataset,
-                sampler=valid_sampler,
+                batch_sampler=valid_sampler,
                 collate_fn=self.collate,
                 pin_memory=False,
                 worker_init_fn=self.funcs["createVclient"],
@@ -323,7 +323,7 @@ class CustomRunner(dl.Runner):
         test_dataloader = BatchPrefetchLoaderWrapper(
             DataLoader(
                 test_dataset,
-                sampler=test_sampler,
+                batch_sampler=test_sampler,
                 collate_fn=self.collate,
                 pin_memory=False,
                 worker_init_fn=self.funcs["createVclient"],
