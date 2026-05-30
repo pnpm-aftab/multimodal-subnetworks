@@ -32,7 +32,9 @@ python3 train_script_rev.py \
     model.masked=False \
     model.model_channels=64 \
     experiment.numvolumes=4 \
-    experiment.num_workers=20
+    experiment.num_workers=20 \
+    experiment.prefetches=32 \
+    experiment.prefetch_factor=8
 
 sleep 10s
 echo "Job $SLURM_JOB_ID completed"
