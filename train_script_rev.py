@@ -120,7 +120,9 @@ class CustomRunner(dl.Runner):
         self.masked = self._hparams["model"].get("masked", False)
 
     def get_engine(self):
-        if torch.cuda.device_count() > 1:
+        # Use SLURM-allocated GPU count, not total visible GPUs on the node
+        n_gpus = int(os.environ.get("SLURM_GPUS_ON_NODE", torch.cuda.device_count()))
+        if n_gpus > 1:
             return dl.DistributedDataParallelEngine(
                 # mixed_precision="fp16",
                 # ddp_kwargs={"backend": "nccl"},
