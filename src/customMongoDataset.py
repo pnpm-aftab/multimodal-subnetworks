@@ -43,7 +43,7 @@ class CustomMongoDataset(MongoDataset):
                 {
                     self.id: {"$in": batch_ids},
                 },
-                self.meta_sample,
+                self.meta_sample + (self.id,),
             )
         )
         # Create mapping from ID to metadata for fast lookup
@@ -130,7 +130,7 @@ class MultimodalMongoDataset(MongoDataset):
                 {
                     self.id: {"$in": batch_ids},
                 },
-                self.meta_sample + ("modalities",),
+                self.meta_sample + ("modalities", self.id),
             )
         )
         # Create mapping from ID to metadata for fast lookup
