@@ -2,7 +2,7 @@
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 24
-#SBATCH --mem=50g
+#SBATCH --mem=100g
 #SBATCH -p qTRDGPUH
 #SBATCH -t 1800
 #SBATCH --gres=gpu:A100:1
