@@ -38,6 +38,10 @@ os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
 # os.environ["NCCL_SOCKET_IFNAME"] = "ib0"
 # os.environ["NCCL_P2P_LEVEL"] = "NVL"
 
+torch.backends.cudnn.benchmark = True
+if hasattr(torch, "set_float32_matmul_precision"):
+    torch.set_float32_matmul_precision("high")
+
 torch_version = torch.__version__
 if version.parse(torch_version) >= version.parse("2.3"):
     scaler = torch.amp.GradScaler()
@@ -76,6 +80,14 @@ class CustomRunner(dl.Runner):
         prefetches=8,
         num_workers=6,
         prefetch_factor=2,
+        train_prefetches=None,
+        train_num_workers=None,
+        train_prefetch_factor=None,
+        train_persistent_workers=True,
+        eval_prefetches=None,
+        eval_num_workers=None,
+        eval_prefetch_factor=None,
+        eval_persistent_workers=False,
         volume_shape=[256] * 3,
         subvolume_shape=[256] * 3,
         lowprecision=False,
@@ -98,6 +110,14 @@ class CustomRunner(dl.Runner):
         self.prefetches = prefetches
         self.num_workers = num_workers
         self.prefetch_factor = prefetch_factor
+        self.train_prefetches = train_prefetches if train_prefetches is not None else prefetches
+        self.train_num_workers = train_num_workers if train_num_workers is not None else num_workers
+        self.train_prefetch_factor = train_prefetch_factor if train_prefetch_factor is not None else prefetch_factor
+        self.train_persistent_workers = train_persistent_workers
+        self.eval_prefetches = eval_prefetches if eval_prefetches is not None else prefetches
+        self.eval_num_workers = eval_num_workers if eval_num_workers is not None else num_workers
+        self.eval_prefetch_factor = eval_prefetch_factor if eval_prefetch_factor is not None else prefetch_factor
+        self.eval_persistent_workers = eval_persistent_workers
 
         self.db_host = db_host
         self.db_name = db_name
@@ -122,6 +142,32 @@ class CustomRunner(dl.Runner):
         self._hparams = hparams
 
         self.masked = self._hparams["model"].get("masked", False)
+
+    def _make_loader(
+        self,
+        dataset,
+        sampler,
+        worker_init_fn,
+        num_workers,
+        prefetch_factor,
+        num_prefetches,
+        persistent_workers,
+    ):
+        loader_kwargs = {
+            "sampler": sampler,
+            "collate_fn": self.collate,
+            "pin_memory": True,
+            "worker_init_fn": worker_init_fn,
+            "num_workers": num_workers,
+        }
+        if num_workers > 0:
+            loader_kwargs["persistent_workers"] = persistent_workers
+            loader_kwargs["prefetch_factor"] = prefetch_factor
+
+        return BatchPrefetchLoaderWrapper(
+            DataLoader(dataset, **loader_kwargs),
+            num_prefetches=num_prefetches,
+        )
 
     def get_engine(self):
         # Use SLURM-allocated GPU count, not total visible GPUs on the node
@@ -184,6 +230,14 @@ class CustomRunner(dl.Runner):
             else self.funcs["mycollate"]
         )
 
+        print(
+            "[LoaderConfig] "
+            f"train_workers={self.train_num_workers}, train_prefetch_factor={self.train_prefetch_factor}, "
+            f"train_prefetches={self.train_prefetches}, train_persistent={self.train_persistent_workers}; "
+            f"eval_workers={self.eval_num_workers}, eval_prefetch_factor={self.eval_prefetch_factor}, "
+            f"eval_prefetches={self.eval_prefetches}, eval_persistent={self.eval_persistent_workers}"
+        )
+
         # get all IDs with the required modalities, pull their labels for cross-validation splits
 
         client = MongoClient("mongodb://" + self.db_host + ":27017")
@@ -199,11 +253,19 @@ class CustomRunner(dl.Runner):
         all_ids = sorted(all_ids)
         # print(all_ids)
 
-        labels = []
-        for id in all_ids:
-            label = posts_meta.find_one({"id": id}, self.meta_fields)[self.meta_fields[0]] # get label for the id
-            labels.append(label)
-        labels = np.array(labels)
+        # Fetch all split labels in one query, preserving all_ids order below.
+        label_field = self.meta_fields[0]
+        meta_docs = {
+            doc["id"]: doc[label_field]
+            for doc in posts_meta.find(
+                {"id": {"$in": all_ids}},
+                {"id": 1, label_field: 1, "_id": 0},
+            )
+        }
+        missing_label_ids = [id for id in all_ids if id not in meta_docs]
+        if missing_label_ids:
+            raise ValueError(f"Missing labels for ids: {missing_label_ids[:10]}")
+        labels = np.array([meta_docs[id] for id in all_ids])
     
         # Create CV split
         cv_folds = StratifiedKFold(n_splits=self._hparams["experiment"]["cv_folds"], shuffle=True, random_state=self._hparams["experiment"].get("cv_seed", 42))
@@ -259,20 +321,14 @@ class CustomRunner(dl.Runner):
             else DBBatchSampler(train_dataset, batch_size=self.num_volumes)
         )
         
-        train_dataloader = BatchPrefetchLoaderWrapper(
-            DataLoader(
-                train_dataset,
-                sampler=train_sampler,
-                collate_fn=self.collate,
-                pin_memory=True,
-                worker_init_fn=self.funcs["createclient"],
-                persistent_workers=True,
-                prefetch_factor=self.prefetch_factor,
-                num_workers=self.num_workers,
-                # prefetch_factor=None,
-                # num_workers=1,  # self.prefetches,
-            ),
-            num_prefetches=self.prefetches,
+        train_dataloader = self._make_loader(
+            train_dataset,
+            train_sampler,
+            self.funcs["createclient"],
+            self.train_num_workers,
+            self.train_prefetch_factor,
+            self.train_prefetches,
+            self.train_persistent_workers,
         )
 
         valid_dataset = usedDataset(
@@ -293,20 +349,14 @@ class CustomRunner(dl.Runner):
             )
         )
         
-        valid_dataloader = BatchPrefetchLoaderWrapper(
-            DataLoader(
-                valid_dataset,
-                sampler=valid_sampler,
-                collate_fn=self.collate,
-                pin_memory=True,
-                worker_init_fn=self.funcs["createVclient"],
-                persistent_workers=True,
-                # prefetch_factor=4,
-                # num_workers=4,  # self.prefetches,
-                prefetch_factor=self.prefetch_factor,
-                num_workers=self.num_workers,
-            ),
-            num_prefetches=self.prefetches,
+        valid_dataloader = self._make_loader(
+            valid_dataset,
+            valid_sampler,
+            self.funcs["createVclient"],
+            self.eval_num_workers,
+            self.eval_prefetch_factor,
+            self.eval_prefetches,
+            self.eval_persistent_workers,
         )
 
         test_dataset = usedDataset(
@@ -325,20 +375,14 @@ class CustomRunner(dl.Runner):
                 test_dataset, batch_size=self.num_volumes, seed=SEED
             )
         )
-        test_dataloader = BatchPrefetchLoaderWrapper(
-            DataLoader(
-                test_dataset,
-                sampler=test_sampler,
-                collate_fn=self.collate,
-                pin_memory=True,
-                worker_init_fn=self.funcs["createVclient"],
-                persistent_workers=True,
-                # prefetch_factor=4,
-                # num_workers=4,  # self.prefetches,
-                prefetch_factor=self.prefetch_factor,
-                num_workers=self.num_workers,
-            ),
-            num_prefetches=self.prefetches,
+        test_dataloader = self._make_loader(
+            test_dataset,
+            test_sampler,
+            self.funcs["createVclient"],
+            self.eval_num_workers,
+            self.eval_prefetch_factor,
+            self.eval_prefetches,
+            self.eval_persistent_workers,
         )
 
         return {"train": train_dataloader, "valid": valid_dataloader, "infer": test_dataloader}
@@ -624,6 +668,14 @@ def main(cfg: DictConfig):
     prefetches = cfg.experiment.prefetches
     num_workers = cfg.experiment.num_workers
     prefetch_factor = cfg.experiment.prefetch_factor
+    train_prefetches = cfg.experiment.get("train_prefetches", None)
+    train_num_workers = cfg.experiment.get("train_num_workers", None)
+    train_prefetch_factor = cfg.experiment.get("train_prefetch_factor", None)
+    train_persistent_workers = cfg.experiment.get("train_persistent_workers", True)
+    eval_prefetches = cfg.experiment.get("eval_prefetches", None)
+    eval_num_workers = cfg.experiment.get("eval_num_workers", None)
+    eval_prefetch_factor = cfg.experiment.get("eval_prefetch_factor", None)
+    eval_persistent_workers = cfg.experiment.get("eval_persistent_workers", False)
     attenuates = cfg.experiment.attenuates
 
     # we need oneCycleLR, but not the rest of the curiculum
@@ -686,6 +738,14 @@ def main(cfg: DictConfig):
             prefetches=prefetches,
             num_workers=num_workers,
             prefetch_factor=prefetch_factor,
+            train_prefetches=train_prefetches,
+            train_num_workers=train_num_workers,
+            train_prefetch_factor=train_prefetch_factor,
+            train_persistent_workers=train_persistent_workers,
+            eval_prefetches=eval_prefetches,
+            eval_num_workers=eval_num_workers,
+            eval_prefetch_factor=eval_prefetch_factor,
+            eval_persistent_workers=eval_persistent_workers,
             indexid=cfg.mongo.index_id,
             db_collection=collections,
             db_name=databases,

@@ -5,11 +5,12 @@
 #SBATCH --mem=100g
 #SBATCH -p qTRDGPUH
 #SBATCH -t 7200
-#SBATCH --gres=gpu:A100:1
+#SBATCH --gres=gpu:1
 #SBATCH -J fm_test
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
 #SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/%j.out
 #SBATCH -A psy53c17
+#SBATCH --exclude=arctrddgxa001
 
 sleep 10s
 echo "Running on host: $HOSTNAME" >&2
@@ -32,9 +33,17 @@ python3 train_script_rev.py \
     model.masked=False \
     model.model_channels=64 \
     experiment.numvolumes=4 \
-    experiment.num_workers=20 \
-    experiment.prefetches=32 \
-    experiment.prefetch_factor=8
+    experiment.num_workers=8 \
+    experiment.prefetches=2 \
+    experiment.prefetch_factor=2 \
+    experiment.train_num_workers=8 \
+    experiment.train_prefetches=2 \
+    experiment.train_prefetch_factor=2 \
+    experiment.train_persistent_workers=True \
+    experiment.eval_num_workers=2 \
+    experiment.eval_prefetches=1 \
+    experiment.eval_prefetch_factor=2 \
+    experiment.eval_persistent_workers=False
 
 sleep 10s
 echo "Job $SLURM_JOB_ID completed"
