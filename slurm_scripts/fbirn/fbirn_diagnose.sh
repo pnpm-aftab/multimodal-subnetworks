@@ -51,6 +51,7 @@ python3 train_script_rev.py \
     experiment.run_infer_each_epoch=False \
     experiment.profile_timings=True \
     experiment.timing_sync_cuda=True \
+    experiment.cudnn_benchmark=False \
     experiment.epochs=2
 
 sleep 10s
