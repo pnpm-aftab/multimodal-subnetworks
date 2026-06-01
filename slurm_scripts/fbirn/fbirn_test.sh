@@ -36,9 +36,9 @@ python3 train_script_rev.py \
     experiment.num_workers=8 \
     experiment.prefetches=2 \
     experiment.prefetch_factor=2 \
-    experiment.train_num_workers=8 \
-    experiment.train_prefetches=2 \
-    experiment.train_prefetch_factor=2 \
+    experiment.train_num_workers=16 \
+    experiment.train_prefetches=4 \
+    experiment.train_prefetch_factor=4 \
     experiment.train_persistent_workers=True \
     experiment.eval_num_workers=2 \
     experiment.eval_prefetches=1 \
