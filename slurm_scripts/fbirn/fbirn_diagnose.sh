@@ -4,19 +4,21 @@
 #SBATCH -c 24
 #SBATCH --mem=200g
 #SBATCH -p qTRDGPUH
-#SBATCH -t 7200
+#SBATCH -t 01:00:00
 #SBATCH --gres=gpu:V100:2
-#SBATCH -J fm_test
+#SBATCH -J fm_diag
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
-#SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/%j.out
+#SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/%x_%j.out
 #SBATCH -A psy53c17
 #SBATCH --exclude=arctrddgxa001
 
 sleep 10s
 echo "Running on host: $HOSTNAME" >&2
 echo "Job ID: $SLURM_JOB_ID" >&2
+echo "Started at: $(date)" >&2
 echo "TMPDIR is: $TMPDIR" >&2
 export TMPDIR=/tmp
+
 source /data/users2/maftab1/miniconda3/bin/activate fbirn-test
 echo "Using python from: $(which python)"
 echo "Conda environment: $CONDA_DEFAULT_ENV"
@@ -26,10 +28,12 @@ dataset="fbirn"
 python3 train_script_rev.py \
     --config-name new_conf \
     --config-dir conf \
-    experiment.experiment_name=${dataset}_multimodal_dense_test \
+    experiment.experiment_name=${dataset}_multimodal_dense_diag \
     experiment.collections=$dataset \
     experiment.dbfields=[falff,smri,dwi] \
     experiment.metafields=[gender_encoded] \
+    experiment.cv_folds=10 \
+    experiment.max_folds=1 \
     model.masked=False \
     model.model_channels=64 \
     experiment.numvolumes=4 \
@@ -47,7 +51,8 @@ python3 train_script_rev.py \
     experiment.run_infer_each_epoch=False \
     experiment.profile_timings=True \
     experiment.timing_sync_cuda=True \
-    experiment.epochs=5
+    experiment.epochs=2
 
 sleep 10s
+echo "Finished at: $(date)" >&2
 echo "Job $SLURM_JOB_ID completed"

@@ -8,6 +8,8 @@ import os
 import csv
 import random
 import shutil
+import math
+import time
 from packaging import version
 import yaml
 
@@ -47,6 +49,49 @@ if version.parse(torch_version) >= version.parse("2.3"):
     scaler = torch.amp.GradScaler()
 else:
     scaler = torch.cuda.amp.GradScaler()
+
+
+def get_rank_world():
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        return torch.distributed.get_rank(), torch.distributed.get_world_size()
+    return int(os.environ.get("RANK", 0)), int(os.environ.get("WORLD_SIZE", 1))
+
+
+class DistributedDBBatchSampler(DBBatchSampler):
+    """
+    Rank-sharded variant of DBBatchSampler.
+
+    DataLoader passes each yielded item to MongoDataset.__getitem__ as a batch
+    of subject indices, so sharding must happen before those mini-batches are
+    formed. Padding keeps each DDP rank at the same number of steps.
+    """
+
+    def __init__(self, data_source, batch_size=1, seed=None, rank=None, world_size=None):
+        super().__init__(data_source, batch_size=batch_size, seed=seed)
+        detected_rank, detected_world_size = get_rank_world()
+        self.rank = detected_rank if rank is None else rank
+        self.world_size = detected_world_size if world_size is None else world_size
+        self.num_samples = int(math.ceil(self.data_size / self.world_size))
+        self.total_size = self.num_samples * self.world_size
+
+    def __iter__(self):
+        if self.seed is not None:
+            rng = np.random.default_rng(self.seed)
+            indices = rng.permutation(self.data_size)
+        else:
+            indices = np.random.permutation(self.data_size)
+
+        padding_size = self.total_size - len(indices)
+        if padding_size > 0 and len(indices) > 0:
+            repeats = int(math.ceil(padding_size / len(indices)))
+            padding = np.tile(indices, repeats)[:padding_size]
+            indices = np.concatenate([indices, padding])
+
+        rank_indices = indices[self.rank : self.total_size : self.world_size]
+        return self.__chunks__(rank_indices, self.batch_size)
+
+    def __len__(self):
+        return (self.num_samples + self.batch_size - 1) // self.batch_size
     
 # CustomRunner – PyTorch for-loop decomposition
 # https://github.com/catalyst-team/catalyst#minimal-examples
@@ -87,7 +132,10 @@ class CustomRunner(dl.Runner):
         eval_prefetches=None,
         eval_num_workers=None,
         eval_prefetch_factor=None,
-        eval_persistent_workers=False,
+        eval_persistent_workers=True,
+        run_infer_each_epoch=False,
+        profile_timings=False,
+        timing_sync_cuda=True,
         volume_shape=[256] * 3,
         subvolume_shape=[256] * 3,
         lowprecision=False,
@@ -118,6 +166,9 @@ class CustomRunner(dl.Runner):
         self.eval_num_workers = eval_num_workers if eval_num_workers is not None else num_workers
         self.eval_prefetch_factor = eval_prefetch_factor if eval_prefetch_factor is not None else prefetch_factor
         self.eval_persistent_workers = eval_persistent_workers
+        self.run_infer_each_epoch = run_infer_each_epoch
+        self.profile_timings = profile_timings
+        self.timing_sync_cuda = timing_sync_cuda
 
         self.db_host = db_host
         self.db_name = db_name
@@ -142,6 +193,30 @@ class CustomRunner(dl.Runner):
         self._hparams = hparams
 
         self.masked = self._hparams["model"].get("masked", False)
+        self.timing_metric_keys = [
+            "time/data_wait_h2d_sec",
+            "time/forward_sec",
+            "time/backward_sec",
+            "time/optimizer_sec",
+            "time/compute_sec",
+            "time/batch_total_sec",
+        ]
+
+    def _sync_timing(self):
+        if self.profile_timings and self.timing_sync_cuda and torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+    def _make_sampler(self, dataset, batch_size, seed=None):
+        if self.engine.is_ddp:
+            rank, world_size = get_rank_world()
+            return DistributedDBBatchSampler(
+                dataset,
+                batch_size=batch_size,
+                seed=seed,
+                rank=rank,
+                world_size=world_size,
+            )
+        return DBBatchSampler(dataset, batch_size=batch_size, seed=seed)
 
     def _make_loader(
         self,
@@ -235,7 +310,8 @@ class CustomRunner(dl.Runner):
             f"train_workers={self.train_num_workers}, train_prefetch_factor={self.train_prefetch_factor}, "
             f"train_prefetches={self.train_prefetches}, train_persistent={self.train_persistent_workers}; "
             f"eval_workers={self.eval_num_workers}, eval_prefetch_factor={self.eval_prefetch_factor}, "
-            f"eval_prefetches={self.eval_prefetches}, eval_persistent={self.eval_persistent_workers}"
+            f"eval_prefetches={self.eval_prefetches}, eval_persistent={self.eval_persistent_workers}; "
+            f"run_infer_each_epoch={self.run_infer_each_epoch}, profile_timings={self.profile_timings}"
         )
 
         # get all IDs with the required modalities, pull their labels for cross-validation splits
@@ -315,11 +391,7 @@ class CustomRunner(dl.Runner):
         )
         
         # Use standard DBBatchSampler for mixed-modality batches (cross-modality competition)
-        train_sampler = (
-            DBBatchSampler(train_dataset, batch_size=self.num_volumes, seed=SEED)
-            if self.engine.is_ddp
-            else DBBatchSampler(train_dataset, batch_size=self.num_volumes)
-        )
+        train_sampler = self._make_sampler(train_dataset, batch_size=self.num_volumes, seed=SEED)
         
         train_dataloader = self._make_loader(
             train_dataset,
@@ -341,13 +413,7 @@ class CustomRunner(dl.Runner):
             id=self.index_id,
         )
         
-        valid_sampler = (
-            DBBatchSampler(valid_dataset, batch_size=self.num_volumes, seed=SEED)
-            if self.engine.is_ddp
-            else DBBatchSampler(
-                valid_dataset, batch_size=self.num_volumes, seed=SEED
-            )
-        )
+        valid_sampler = self._make_sampler(valid_dataset, batch_size=self.num_volumes, seed=SEED)
         
         valid_dataloader = self._make_loader(
             valid_dataset,
@@ -359,33 +425,31 @@ class CustomRunner(dl.Runner):
             self.eval_persistent_workers,
         )
 
-        test_dataset = usedDataset(
-            test_ids,#take first validation_percent percent from list
-            self.funcs["mytransform"],
-            None,
-            self.db_fields,
-            self.meta_fields,
-            normalize=unit_interval_normalize,
-            id=self.index_id,
-        )
-        test_sampler = (
-            DBBatchSampler(test_dataset, batch_size=self.num_volumes, seed=SEED)
-            if self.engine.is_ddp
-            else DBBatchSampler(
-                test_dataset, batch_size=self.num_volumes, seed=SEED
-            )
-        )
-        test_dataloader = self._make_loader(
-            test_dataset,
-            test_sampler,
-            self.funcs["createVclient"],
-            self.eval_num_workers,
-            self.eval_prefetch_factor,
-            self.eval_prefetches,
-            self.eval_persistent_workers,
-        )
+        loaders = {"train": train_dataloader, "valid": valid_dataloader}
 
-        return {"train": train_dataloader, "valid": valid_dataloader, "infer": test_dataloader}
+        if self.run_infer_each_epoch:
+            test_dataset = usedDataset(
+                test_ids,#take first validation_percent percent from list
+                self.funcs["mytransform"],
+                None,
+                self.db_fields,
+                self.meta_fields,
+                normalize=unit_interval_normalize,
+                id=self.index_id,
+            )
+            test_sampler = self._make_sampler(test_dataset, batch_size=self.num_volumes, seed=SEED)
+            test_dataloader = self._make_loader(
+                test_dataset,
+                test_sampler,
+                self.funcs["createVclient"],
+                self.eval_num_workers,
+                self.eval_prefetch_factor,
+                self.eval_prefetches,
+                self.eval_persistent_workers,
+            )
+            loaders["infer"] = test_dataloader
+
+        return loaders
 
     def get_snip_data(self, posts_bin, posts_meta, snip_ids):
         snip_dict = {}
@@ -515,13 +579,18 @@ class CustomRunner(dl.Runner):
 
     def on_loader_start(self, runner):
         super().on_loader_start(runner)
+        metric_keys = ["loss", "accuracy", "learning rate"]
+        if self.profile_timings:
+            metric_keys.extend(self.timing_metric_keys)
         self.meters = {
             key: metrics.AdditiveValueMetric(compute_on_call=False)
-            for key in ["loss", "accuracy", "learning rate"]
+            for key in metric_keys
         }
         self.meters["auc"] = metrics.AUCMetric(
             compute_on_call=False
         )
+        self._last_batch_end_time = None
+        self._current_data_wait_h2d_sec = 0.0
 
         # --- CSV LOGGING SETUP ---
         rank = distributed.get_rank()
@@ -539,9 +608,57 @@ class CustomRunner(dl.Runner):
         if not file_exists:
             self.csv_writer.writerow(["epoch", "probability", "target"])
 
+        if self.profile_timings:
+            self.timing_csv_filename = os.path.join(
+                self._logdir,
+                f"batch_timing_{loader_key}_rank_{rank}.csv",
+            )
+            timing_file_exists = (
+                os.path.isfile(self.timing_csv_filename)
+                and os.path.getsize(self.timing_csv_filename) > 0
+            )
+            self.timing_csv_file = open(self.timing_csv_filename, 'a', newline='')
+            self.timing_csv_writer = csv.writer(self.timing_csv_file)
+            if not timing_file_exists:
+                self.timing_csv_writer.writerow(
+                    [
+                        "epoch",
+                        "batch",
+                        "data_wait_h2d_sec",
+                        "forward_sec",
+                        "backward_sec",
+                        "optimizer_sec",
+                        "compute_sec",
+                        "batch_total_sec",
+                    ]
+                )
+
+    def on_batch_start(self, runner):
+        parent = super()
+        if hasattr(parent, "on_batch_start"):
+            parent.on_batch_start(runner)
+        if self.profile_timings:
+            self._sync_timing()
+            now = time.perf_counter()
+            self._current_data_wait_h2d_sec = (
+                0.0
+                if self._last_batch_end_time is None
+                else now - self._last_batch_end_time
+            )
+
+    def on_batch_end(self, runner):
+        if self.profile_timings:
+            self._sync_timing()
+            self._last_batch_end_time = time.perf_counter()
+        parent = super()
+        if hasattr(parent, "on_batch_end"):
+            parent.on_batch_end(runner)
 
     def on_loader_end(self, runner):
-        for key in ["loss", "accuracy", "learning rate"]:
+        metric_keys = ["loss", "accuracy", "learning rate"]
+        if self.profile_timings:
+            metric_keys.extend(self.timing_metric_keys)
+        for key in metric_keys:
             self.loader_metrics[key] = self.meters[key].compute()[0]
         self.loader_metrics["auc"] = self.meters["auc"].compute()[2]
 
@@ -563,6 +680,8 @@ class CustomRunner(dl.Runner):
         # CSV Safety Close
         if hasattr(self, 'csv_file') and self.csv_file:
             self.csv_file.close()
+        if hasattr(self, 'timing_csv_file') and self.timing_csv_file:
+            self.timing_csv_file.close()
 
         super().on_loader_end(runner)
 
@@ -578,28 +697,75 @@ class CustomRunner(dl.Runner):
         else:
             sample, label = batch
 
+        timing = {}
+        if self.profile_timings:
+            self._sync_timing()
+            compute_start = time.perf_counter()
+
         # run model forward/backward pass
         if self.model.training:
             if self.bit16:
+                forward_start = time.perf_counter() if self.profile_timings else None
                 with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
                     y_hat = self.model.forward(sample) if not self.masked else self.model.forward(sample, modality)
                     loss = self.criterion(y_hat, label.float())
+                if self.profile_timings:
+                    self._sync_timing()
+                    timing["time/forward_sec"] = time.perf_counter() - forward_start
+
+                backward_start = time.perf_counter() if self.profile_timings else None
                 scaler.scale(loss).backward()
+                if self.profile_timings:
+                    self._sync_timing()
+                    timing["time/backward_sec"] = time.perf_counter() - backward_start
+
+                optimizer_start = time.perf_counter() if self.profile_timings else None
                 scaler.step(self.optimizer)
                 self.scheduler.step()
                 scaler.update()
                 self.optimizer.zero_grad()
+                if self.profile_timings:
+                    self._sync_timing()
+                    timing["time/optimizer_sec"] = time.perf_counter() - optimizer_start
             else:
+                forward_start = time.perf_counter() if self.profile_timings else None
                 y_hat = self.model.forward(sample) if not self.masked else self.model.forward(sample, modality)
                 loss = self.criterion(y_hat, label.float())
+                if self.profile_timings:
+                    self._sync_timing()
+                    timing["time/forward_sec"] = time.perf_counter() - forward_start
+
+                backward_start = time.perf_counter() if self.profile_timings else None
                 loss.backward()
+                if self.profile_timings:
+                    self._sync_timing()
+                    timing["time/backward_sec"] = time.perf_counter() - backward_start
+
+                optimizer_start = time.perf_counter() if self.profile_timings else None
                 self.optimizer.step()
                 self.scheduler.step()
                 self.optimizer.zero_grad()
+                if self.profile_timings:
+                    self._sync_timing()
+                    timing["time/optimizer_sec"] = time.perf_counter() - optimizer_start
         else:
+            forward_start = time.perf_counter() if self.profile_timings else None
             with torch.no_grad():
                 y_hat = self.model.forward(sample) if not self.masked else self.model.forward(sample, modality)
                 loss = self.criterion(y_hat, label.float())
+            if self.profile_timings:
+                self._sync_timing()
+                timing["time/forward_sec"] = time.perf_counter() - forward_start
+                timing["time/backward_sec"] = 0.0
+                timing["time/optimizer_sec"] = 0.0
+
+        if self.profile_timings:
+            self._sync_timing()
+            timing["time/compute_sec"] = time.perf_counter() - compute_start
+            timing["time/data_wait_h2d_sec"] = self._current_data_wait_h2d_sec
+            timing["time/batch_total_sec"] = (
+                timing["time/data_wait_h2d_sec"] + timing["time/compute_sec"]
+            )
 
         # Metrics calculation and CSV logging
         with torch.no_grad():
@@ -622,6 +788,25 @@ class CustomRunner(dl.Runner):
                     self.optimizer.param_groups[0]["lr"]
             )
         })
+        if self.profile_timings:
+            self.batch_metrics.update(
+                {
+                    key: torch.tensor(value, device=loss.device)
+                    for key, value in timing.items()
+                }
+            )
+            self.timing_csv_writer.writerow(
+                [
+                    self.epoch_step,
+                    getattr(self, "batch_step", ""),
+                    timing["time/data_wait_h2d_sec"],
+                    timing["time/forward_sec"],
+                    timing["time/backward_sec"],
+                    timing["time/optimizer_sec"],
+                    timing["time/compute_sec"],
+                    timing["time/batch_total_sec"],
+                ]
+            )
         for key in self.batch_metrics:
             self.meters[key].update(
                 self.batch_metrics[key].item(), self.batch_size
@@ -675,7 +860,11 @@ def main(cfg: DictConfig):
     eval_prefetches = cfg.experiment.get("eval_prefetches", None)
     eval_num_workers = cfg.experiment.get("eval_num_workers", None)
     eval_prefetch_factor = cfg.experiment.get("eval_prefetch_factor", None)
-    eval_persistent_workers = cfg.experiment.get("eval_persistent_workers", False)
+    eval_persistent_workers = cfg.experiment.get("eval_persistent_workers", True)
+    run_infer_each_epoch = cfg.experiment.get("run_infer_each_epoch", False)
+    profile_timings = cfg.experiment.get("profile_timings", False)
+    timing_sync_cuda = cfg.experiment.get("timing_sync_cuda", True)
+    max_folds = cfg.experiment.get("max_folds", None)
     attenuates = cfg.experiment.attenuates
 
     # we need oneCycleLR, but not the rest of the curiculum
@@ -708,14 +897,18 @@ def main(cfg: DictConfig):
     # Set hparams
     hparams = OmegaConf.to_container(cfg, resolve=True)
 
+    folds_to_run = cfg.experiment.cv_folds if max_folds is None else min(cfg.experiment.cv_folds, int(max_folds))
+    if folds_to_run < 1:
+        raise ValueError("experiment.max_folds must be at least 1 when set")
+
     # run cross-validation
-    for fold_idx in range(cfg.experiment.cv_folds):
+    for fold_idx in range(folds_to_run):
 
         print(f"Starting fold {fold_idx+1}/{cfg.experiment.cv_folds}")
         hparams["fold_idx"] = fold_idx
 
         rundir = f"{logdir}/fold_{fold_idx}"
-        os.makedirs(logdir, exist_ok=True)
+        os.makedirs(rundir, exist_ok=True)
 
         runner = CustomRunner(
             logdir=rundir, # this is self._logdir
@@ -746,6 +939,9 @@ def main(cfg: DictConfig):
             eval_num_workers=eval_num_workers,
             eval_prefetch_factor=eval_prefetch_factor,
             eval_persistent_workers=eval_persistent_workers,
+            run_infer_each_epoch=run_infer_each_epoch,
+            profile_timings=profile_timings,
+            timing_sync_cuda=timing_sync_cuda,
             indexid=cfg.mongo.index_id,
             db_collection=collections,
             db_name=databases,
