@@ -36,14 +36,15 @@ python3 train_script_rev.py \
     experiment.num_workers=8 \
     experiment.prefetches=2 \
     experiment.prefetch_factor=2 \
-    experiment.train_num_workers=10 \
+    experiment.train_num_workers=6 \
     experiment.train_prefetches=2 \
     experiment.train_prefetch_factor=2 \
     experiment.train_persistent_workers=True \
     experiment.eval_num_workers=2 \
     experiment.eval_prefetches=1 \
     experiment.eval_prefetch_factor=2 \
-    experiment.eval_persistent_workers=False
+    experiment.eval_persistent_workers=False \
+    experiment.epochs=5
 
 sleep 10s
 echo "Job $SLURM_JOB_ID completed"
