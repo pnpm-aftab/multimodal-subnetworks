@@ -65,6 +65,7 @@ experiment:
   run_infer_each_epoch: False
   profile_timings: False
   timing_sync_cuda: True
+  cudnn_benchmark: False
   attenuates: 0.8
 
 resnet_specific:

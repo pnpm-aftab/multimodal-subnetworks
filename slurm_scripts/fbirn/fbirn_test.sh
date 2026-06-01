@@ -45,8 +45,9 @@ python3 train_script_rev.py \
     experiment.eval_prefetch_factor=2 \
     experiment.eval_persistent_workers=True \
     experiment.run_infer_each_epoch=False \
-    experiment.profile_timings=True \
-    experiment.timing_sync_cuda=True \
+    experiment.profile_timings=False \
+    experiment.timing_sync_cuda=False \
+    experiment.cudnn_benchmark=False \
     experiment.epochs=5
 
 sleep 10s

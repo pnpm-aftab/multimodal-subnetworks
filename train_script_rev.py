@@ -40,7 +40,7 @@ os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
 # os.environ["NCCL_SOCKET_IFNAME"] = "ib0"
 # os.environ["NCCL_P2P_LEVEL"] = "NVL"
 
-torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.benchmark = False
 if hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
@@ -66,13 +66,27 @@ class DistributedDBBatchSampler(DBBatchSampler):
     formed. Padding keeps each DDP rank at the same number of steps.
     """
 
-    def __init__(self, data_source, batch_size=1, seed=None, rank=None, world_size=None):
+    def __init__(
+        self,
+        data_source,
+        batch_size=1,
+        seed=None,
+        rank=None,
+        world_size=None,
+        sample_weights=None,
+    ):
         super().__init__(data_source, batch_size=batch_size, seed=seed)
         detected_rank, detected_world_size = get_rank_world()
         self.rank = detected_rank if rank is None else rank
         self.world_size = detected_world_size if world_size is None else world_size
-        self.num_samples = int(math.ceil(self.data_size / self.world_size))
-        self.total_size = self.num_samples * self.world_size
+        self.global_batch_size = self.batch_size * self.world_size
+        self.num_batches = int(math.ceil(self.data_size / self.global_batch_size))
+        self.total_size = self.num_batches * self.global_batch_size
+        if sample_weights is None:
+            sample_weights = [1] * self.data_size
+        if len(sample_weights) != self.data_size:
+            raise ValueError("sample_weights must be aligned with dataset indices")
+        self.sample_weights = np.asarray(sample_weights, dtype=np.float32)
 
     def __iter__(self):
         if self.seed is not None:
@@ -87,11 +101,37 @@ class DistributedDBBatchSampler(DBBatchSampler):
             padding = np.tile(indices, repeats)[:padding_size]
             indices = np.concatenate([indices, padding])
 
-        rank_indices = indices[self.rank : self.total_size : self.world_size]
-        return self.__chunks__(rank_indices, self.batch_size)
+        rank_batches = []
+        for start in range(0, self.total_size, self.global_batch_size):
+            global_batch = indices[start : start + self.global_batch_size]
+            per_rank = [[] for _ in range(self.world_size)]
+            per_rank_weight = [0.0 for _ in range(self.world_size)]
+
+            # Heaviest subjects first makes greedy balancing effective while the
+            # enclosing global batch remains shuffled.
+            ordered = sorted(
+                global_batch,
+                key=lambda idx: float(self.sample_weights[int(idx)]),
+                reverse=True,
+            )
+            for idx in ordered:
+                candidates = [
+                    r for r in range(self.world_size)
+                    if len(per_rank[r]) < self.batch_size
+                ]
+                target_rank = min(
+                    candidates,
+                    key=lambda r: (per_rank_weight[r], len(per_rank[r]), r),
+                )
+                per_rank[target_rank].append(idx)
+                per_rank_weight[target_rank] += float(self.sample_weights[int(idx)])
+
+            rank_batches.append(np.asarray(per_rank[self.rank]))
+
+        return iter(rank_batches)
 
     def __len__(self):
-        return (self.num_samples + self.batch_size - 1) // self.batch_size
+        return self.num_batches
     
 # CustomRunner – PyTorch for-loop decomposition
 # https://github.com/catalyst-team/catalyst#minimal-examples
@@ -206,7 +246,7 @@ class CustomRunner(dl.Runner):
         if self.profile_timings and self.timing_sync_cuda and torch.cuda.is_available():
             torch.cuda.synchronize()
 
-    def _make_sampler(self, dataset, batch_size, seed=None):
+    def _make_sampler(self, dataset, batch_size, seed=None, sample_weights=None):
         if self.engine.is_ddp:
             rank, world_size = get_rank_world()
             return DistributedDBBatchSampler(
@@ -215,6 +255,7 @@ class CustomRunner(dl.Runner):
                 seed=seed,
                 rank=rank,
                 world_size=world_size,
+                sample_weights=sample_weights,
             )
         return DBBatchSampler(dataset, batch_size=batch_size, seed=seed)
 
@@ -311,7 +352,8 @@ class CustomRunner(dl.Runner):
             f"train_prefetches={self.train_prefetches}, train_persistent={self.train_persistent_workers}; "
             f"eval_workers={self.eval_num_workers}, eval_prefetch_factor={self.eval_prefetch_factor}, "
             f"eval_prefetches={self.eval_prefetches}, eval_persistent={self.eval_persistent_workers}; "
-            f"run_infer_each_epoch={self.run_infer_each_epoch}, profile_timings={self.profile_timings}"
+            f"run_infer_each_epoch={self.run_infer_each_epoch}, profile_timings={self.profile_timings}; "
+            f"cudnn_benchmark={torch.backends.cudnn.benchmark}"
         )
 
         # get all IDs with the required modalities, pull their labels for cross-validation splits
@@ -335,7 +377,7 @@ class CustomRunner(dl.Runner):
             doc["id"]: doc[label_field]
             for doc in posts_meta.find(
                 {"id": {"$in": all_ids}},
-                {"id": 1, label_field: 1, "_id": 0},
+                {"id": 1, label_field: 1, "modalities": 1, "_id": 0},
             )
         }
         missing_label_ids = [id for id in all_ids if id not in meta_docs]
@@ -353,6 +395,17 @@ class CustomRunner(dl.Runner):
         train_ids = all_ids[train_idx].tolist() # mongo expects default python list, not numpy array
         valid_ids = all_ids[valid_idx].tolist()
         test_ids = all_ids[test_idx].tolist()
+        requested_modalities = set(self.db_fields)
+        modality_counts = {
+            id: max(
+                1,
+                len(set(meta_docs[id].get("modalities", [])).intersection(requested_modalities)),
+            )
+            for id in all_ids
+        }
+        train_sample_weights = [modality_counts[id] for id in train_ids]
+        valid_sample_weights = [modality_counts[id] for id in valid_ids]
+        test_sample_weights = [modality_counts[id] for id in test_ids]
 
         # get data for masks calculation
         if self.masked:
@@ -391,7 +444,12 @@ class CustomRunner(dl.Runner):
         )
         
         # Use standard DBBatchSampler for mixed-modality batches (cross-modality competition)
-        train_sampler = self._make_sampler(train_dataset, batch_size=self.num_volumes, seed=SEED)
+        train_sampler = self._make_sampler(
+            train_dataset,
+            batch_size=self.num_volumes,
+            seed=SEED,
+            sample_weights=train_sample_weights,
+        )
         
         train_dataloader = self._make_loader(
             train_dataset,
@@ -413,7 +471,12 @@ class CustomRunner(dl.Runner):
             id=self.index_id,
         )
         
-        valid_sampler = self._make_sampler(valid_dataset, batch_size=self.num_volumes, seed=SEED)
+        valid_sampler = self._make_sampler(
+            valid_dataset,
+            batch_size=self.num_volumes,
+            seed=SEED,
+            sample_weights=valid_sample_weights,
+        )
         
         valid_dataloader = self._make_loader(
             valid_dataset,
@@ -437,7 +500,12 @@ class CustomRunner(dl.Runner):
                 normalize=unit_interval_normalize,
                 id=self.index_id,
             )
-            test_sampler = self._make_sampler(test_dataset, batch_size=self.num_volumes, seed=SEED)
+            test_sampler = self._make_sampler(
+                test_dataset,
+                batch_size=self.num_volumes,
+                seed=SEED,
+                sample_weights=test_sample_weights,
+            )
             test_dataloader = self._make_loader(
                 test_dataset,
                 test_sampler,
@@ -864,8 +932,10 @@ def main(cfg: DictConfig):
     run_infer_each_epoch = cfg.experiment.get("run_infer_each_epoch", False)
     profile_timings = cfg.experiment.get("profile_timings", False)
     timing_sync_cuda = cfg.experiment.get("timing_sync_cuda", True)
+    cudnn_benchmark = cfg.experiment.get("cudnn_benchmark", False)
     max_folds = cfg.experiment.get("max_folds", None)
     attenuates = cfg.experiment.attenuates
+    torch.backends.cudnn.benchmark = bool(cudnn_benchmark)
 
     # we need oneCycleLR, but not the rest of the curiculum
     subvolume_shape = [cubesizes] * 3
