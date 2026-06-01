@@ -40,6 +40,7 @@ experiment:
   experiment_name: test # used in wandb name and logdir name
   cv_seed: 42
   cv_folds: 10
+  max_folds: null
   lr_scale: 0.01
   cubesizes: 256
   numcubes: 1
@@ -60,7 +61,10 @@ experiment:
   eval_prefetches: null
   eval_num_workers: null
   eval_prefetch_factor: null
-  eval_persistent_workers: False
+  eval_persistent_workers: True
+  run_infer_each_epoch: False
+  profile_timings: False
+  timing_sync_cuda: True
   attenuates: 0.8
 
 resnet_specific:
