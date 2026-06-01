@@ -28,6 +28,7 @@ python3 train_script_rev.py \
     --config-name new_conf \
     --config-dir conf \
     experiment.experiment_name=${dataset}_multimodal_dense_1gpu_test \
+    experiment.databases=multimodalSubnetworks \
     experiment.collections=$dataset \
     experiment.dbfields=[falff,smri,dwi] \
     experiment.metafields=[gender_encoded] \
