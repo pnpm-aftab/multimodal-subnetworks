@@ -53,6 +53,14 @@ experiment:
   prefetches: 16
   num_workers: 12
   prefetch_factor: 4
+  train_prefetches: null
+  train_num_workers: null
+  train_prefetch_factor: null
+  train_persistent_workers: True
+  eval_prefetches: null
+  eval_num_workers: null
+  eval_prefetch_factor: null
+  eval_persistent_workers: False
   attenuates: 0.8
 
 resnet_specific:
@@ -63,4 +71,3 @@ resnet_specific:
   initial_pool: True
   dropout: 0.2
   use_checkpointing: True
-
