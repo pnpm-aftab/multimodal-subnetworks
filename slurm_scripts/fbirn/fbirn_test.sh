@@ -5,7 +5,7 @@
 #SBATCH --mem=100g
 #SBATCH -p qTRDGPUH
 #SBATCH -t 7200
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:V100:2
 #SBATCH -J fm_test
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
 #SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/%j.out
