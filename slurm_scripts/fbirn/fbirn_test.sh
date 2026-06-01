@@ -10,6 +10,7 @@
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
 #SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/%j.out
 #SBATCH -A psy53c17
+#SBATCH --exclude=arctrddgxa001
 
 sleep 10s
 echo "Running on host: $HOSTNAME" >&2
