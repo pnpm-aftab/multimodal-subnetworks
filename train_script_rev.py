@@ -24,7 +24,16 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 from resnet import ResNet3D
 
 from mindfultensors.mongoloader import MongoClient
-from mindfultensors.utils import unit_interval_normalize, DBBatchSampler
+from mindfultensors.utils import DBBatchSampler
+
+
+def safe_normalize(img):
+    """Unit interval normalization with epsilon protection against zero-variance volumes."""
+    mn, mx = img.min(), img.max()
+    if mx - mn < 1e-8:
+        return torch.zeros_like(img)
+    return (img - mn) / (mx - mn)
+
 
 from src.db_client import ClientCreator
 from src.customMongoDataset import CustomMongoDataset, MultimodalMongoDataset, multimodal_collate, make_serial
@@ -437,7 +446,7 @@ class CustomRunner(dl.Runner):
             None,
             self.db_fields,
             self.meta_fields,
-            normalize=unit_interval_normalize,
+            normalize=safe_normalize,
             id=self.index_id,
         )
         
@@ -465,7 +474,7 @@ class CustomRunner(dl.Runner):
             None,
             self.db_fields,
             self.meta_fields,
-            normalize=unit_interval_normalize,
+            normalize=safe_normalize,
             id=self.index_id,
         )
         
@@ -492,7 +501,7 @@ class CustomRunner(dl.Runner):
             None,
             self.db_fields,
             self.meta_fields,
-            normalize=unit_interval_normalize,
+            normalize=safe_normalize,
             id=self.index_id,
         )
         test_sampler = self._make_sampler(
@@ -564,7 +573,7 @@ class CustomRunner(dl.Runner):
                 data = b"".join([s["chunk"] for s in samples_for_id_kind])
 
                 result = {
-                    "input": unit_interval_normalize(self.funcs["mytransform"](data).float()),
+                    "input": safe_normalize(self.funcs["mytransform"](data).float()),
                     "modality": mod,
                     "label": torch.tensor(label).unsqueeze(0),
                 }
