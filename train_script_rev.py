@@ -374,7 +374,7 @@ class CustomRunner(dl.Runner):
         # Fetch all split labels in one query, preserving all_ids order below.
         label_field = self.meta_fields[0]
         meta_docs = {
-            doc["id"]: doc[label_field]
+            doc["id"]: doc
             for doc in posts_meta.find(
                 {"id": {"$in": all_ids}},
                 {"id": 1, label_field: 1, "modalities": 1, "_id": 0},
@@ -383,7 +383,7 @@ class CustomRunner(dl.Runner):
         missing_label_ids = [id for id in all_ids if id not in meta_docs]
         if missing_label_ids:
             raise ValueError(f"Missing labels for ids: {missing_label_ids[:10]}")
-        labels = np.array([meta_docs[id] for id in all_ids])
+        labels = np.array([meta_docs[id][label_field] for id in all_ids])
     
         # Create CV split
         cv_folds = StratifiedKFold(n_splits=self._hparams["experiment"]["cv_folds"], shuffle=True, random_state=self._hparams["experiment"].get("cv_seed", 42))
