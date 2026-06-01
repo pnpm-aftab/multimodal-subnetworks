@@ -2,10 +2,10 @@
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 24
-#SBATCH --mem=100g
+#SBATCH --mem=200g
 #SBATCH -p qTRDGPUH
 #SBATCH -t 7200
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:V100:2
 #SBATCH -J fm_test
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
 #SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/%j.out
@@ -36,14 +36,15 @@ python3 train_script_rev.py \
     experiment.num_workers=8 \
     experiment.prefetches=2 \
     experiment.prefetch_factor=2 \
-    experiment.train_num_workers=8 \
+    experiment.train_num_workers=6 \
     experiment.train_prefetches=2 \
     experiment.train_prefetch_factor=2 \
     experiment.train_persistent_workers=True \
     experiment.eval_num_workers=2 \
     experiment.eval_prefetches=1 \
     experiment.eval_prefetch_factor=2 \
-    experiment.eval_persistent_workers=False
+    experiment.eval_persistent_workers=False \
+    experiment.epochs=5
 
 sleep 10s
 echo "Job $SLURM_JOB_ID completed"
