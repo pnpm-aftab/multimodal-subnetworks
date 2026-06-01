@@ -62,7 +62,6 @@ experiment:
   eval_num_workers: null
   eval_prefetch_factor: null
   eval_persistent_workers: True
-  run_infer_each_epoch: False
   profile_timings: False
   timing_sync_cuda: True
   cudnn_benchmark: False

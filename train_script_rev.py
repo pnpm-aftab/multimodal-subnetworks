@@ -173,7 +173,6 @@ class CustomRunner(dl.Runner):
         eval_num_workers=None,
         eval_prefetch_factor=None,
         eval_persistent_workers=True,
-        run_infer_each_epoch=False,
         profile_timings=False,
         timing_sync_cuda=True,
         volume_shape=[256] * 3,
@@ -206,7 +205,6 @@ class CustomRunner(dl.Runner):
         self.eval_num_workers = eval_num_workers if eval_num_workers is not None else num_workers
         self.eval_prefetch_factor = eval_prefetch_factor if eval_prefetch_factor is not None else prefetch_factor
         self.eval_persistent_workers = eval_persistent_workers
-        self.run_infer_each_epoch = run_infer_each_epoch
         self.profile_timings = profile_timings
         self.timing_sync_cuda = timing_sync_cuda
 
@@ -352,7 +350,7 @@ class CustomRunner(dl.Runner):
             f"train_prefetches={self.train_prefetches}, train_persistent={self.train_persistent_workers}; "
             f"eval_workers={self.eval_num_workers}, eval_prefetch_factor={self.eval_prefetch_factor}, "
             f"eval_prefetches={self.eval_prefetches}, eval_persistent={self.eval_persistent_workers}; "
-            f"run_infer_each_epoch={self.run_infer_each_epoch}, profile_timings={self.profile_timings}; "
+            f"profile_timings={self.profile_timings}; "
             f"cudnn_benchmark={torch.backends.cudnn.benchmark}"
         )
 
@@ -488,36 +486,32 @@ class CustomRunner(dl.Runner):
             self.eval_persistent_workers,
         )
 
-        loaders = {"train": train_dataloader, "valid": valid_dataloader}
+        test_dataset = usedDataset(
+            test_ids,#take first validation_percent percent from list
+            self.funcs["mytransform"],
+            None,
+            self.db_fields,
+            self.meta_fields,
+            normalize=unit_interval_normalize,
+            id=self.index_id,
+        )
+        test_sampler = self._make_sampler(
+            test_dataset,
+            batch_size=self.num_volumes,
+            seed=SEED,
+            sample_weights=test_sample_weights,
+        )
+        test_dataloader = self._make_loader(
+            test_dataset,
+            test_sampler,
+            self.funcs["createVclient"],
+            self.eval_num_workers,
+            self.eval_prefetch_factor,
+            self.eval_prefetches,
+            self.eval_persistent_workers,
+        )
 
-        if self.run_infer_each_epoch:
-            test_dataset = usedDataset(
-                test_ids,#take first validation_percent percent from list
-                self.funcs["mytransform"],
-                None,
-                self.db_fields,
-                self.meta_fields,
-                normalize=unit_interval_normalize,
-                id=self.index_id,
-            )
-            test_sampler = self._make_sampler(
-                test_dataset,
-                batch_size=self.num_volumes,
-                seed=SEED,
-                sample_weights=test_sample_weights,
-            )
-            test_dataloader = self._make_loader(
-                test_dataset,
-                test_sampler,
-                self.funcs["createVclient"],
-                self.eval_num_workers,
-                self.eval_prefetch_factor,
-                self.eval_prefetches,
-                self.eval_persistent_workers,
-            )
-            loaders["infer"] = test_dataloader
-
-        return loaders
+        return {"train": train_dataloader, "valid": valid_dataloader, "infer": test_dataloader}
 
     def get_snip_data(self, posts_bin, posts_meta, snip_ids):
         snip_dict = {}
@@ -929,7 +923,6 @@ def main(cfg: DictConfig):
     eval_num_workers = cfg.experiment.get("eval_num_workers", None)
     eval_prefetch_factor = cfg.experiment.get("eval_prefetch_factor", None)
     eval_persistent_workers = cfg.experiment.get("eval_persistent_workers", True)
-    run_infer_each_epoch = cfg.experiment.get("run_infer_each_epoch", False)
     profile_timings = cfg.experiment.get("profile_timings", False)
     timing_sync_cuda = cfg.experiment.get("timing_sync_cuda", True)
     cudnn_benchmark = cfg.experiment.get("cudnn_benchmark", False)
@@ -1009,7 +1002,6 @@ def main(cfg: DictConfig):
             eval_num_workers=eval_num_workers,
             eval_prefetch_factor=eval_prefetch_factor,
             eval_persistent_workers=eval_persistent_workers,
-            run_infer_each_epoch=run_infer_each_epoch,
             profile_timings=profile_timings,
             timing_sync_cuda=timing_sync_cuda,
             indexid=cfg.mongo.index_id,

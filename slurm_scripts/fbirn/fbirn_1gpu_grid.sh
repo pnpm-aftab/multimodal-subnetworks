@@ -50,11 +50,10 @@ python3 train_script_rev.py \
     experiment.train_prefetches=2 \
     experiment.train_prefetch_factor=${TRAIN_PREFETCH_FACTOR} \
     experiment.train_persistent_workers=True \
-    experiment.eval_num_workers=2 \
-    experiment.eval_prefetches=1 \
+    experiment.eval_num_workers=6 \
+    experiment.eval_prefetches=2 \
     experiment.eval_prefetch_factor=2 \
     experiment.eval_persistent_workers=True \
-    experiment.run_infer_each_epoch=False \
     experiment.profile_timings=False \
     experiment.timing_sync_cuda=False \
     experiment.cudnn_benchmark=False \
