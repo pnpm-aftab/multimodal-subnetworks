@@ -2,7 +2,7 @@
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 24
-#SBATCH --mem=200g
+#SBATCH --mem=180g
 #SBATCH -p qTRDGPUH
 #SBATCH -t 04:00:00
 #SBATCH --gres=gpu:V100:2
@@ -23,6 +23,7 @@ echo "Using python from: $(which python)"
 echo "Conda environment: $CONDA_DEFAULT_ENV"
 
 dataset="ukb"
+INIT_WEIGHTS_PATH="./init_weights_seed1997_ch64.pth"
 
 python3 train_script_rev.py \
     --config-name new_conf \
@@ -36,18 +37,19 @@ python3 train_script_rev.py \
     experiment.max_folds=1 \
     model.masked=False \
     model.model_channels=64 \
-    experiment.numvolumes=4 \
+    model.init_weights_path=${INIT_WEIGHTS_PATH} \
+    experiment.numvolumes=2 \
     experiment.num_workers=8 \
     experiment.prefetches=2 \
     experiment.prefetch_factor=2 \
     experiment.train_num_workers=6 \
     experiment.train_prefetches=2 \
     experiment.train_prefetch_factor=2 \
-    experiment.train_persistent_workers=True \
+    experiment.train_persistent_workers=False \
     experiment.eval_num_workers=6 \
     experiment.eval_prefetches=2 \
     experiment.eval_prefetch_factor=2 \
-    experiment.eval_persistent_workers=True \
+    experiment.eval_persistent_workers=False \
     experiment.profile_timings=False \
     experiment.timing_sync_cuda=False \
     experiment.cudnn_benchmark=False \

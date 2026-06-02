@@ -23,6 +23,7 @@ echo "Using python from: $(which python)"
 echo "Conda environment: $CONDA_DEFAULT_ENV"
 
 dataset="fbirn"
+INIT_WEIGHTS_PATH="./init_weights_seed1997_ch64.pth"
 
 python3 train_script_rev.py \
     --config-name new_conf \
@@ -35,6 +36,7 @@ python3 train_script_rev.py \
     experiment.max_folds=1 \
     model.masked=False \
     model.model_channels=64 \
+    model.init_weights_path=${INIT_WEIGHTS_PATH} \
     experiment.numvolumes=4 \
     experiment.num_workers=8 \
     experiment.prefetches=2 \

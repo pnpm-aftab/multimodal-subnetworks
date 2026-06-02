@@ -279,7 +279,7 @@ class CustomRunner(dl.Runner):
         loader_kwargs = {
             "sampler": sampler,
             "collate_fn": self.collate,
-            "pin_memory": True,
+            "pin_memory": False,
             "worker_init_fn": worker_init_fn,
             "num_workers": num_workers,
         }
@@ -588,8 +588,13 @@ class CustomRunner(dl.Runner):
             n_classes=self.n_classes, 
             channels=self.n_channels
         )
-        # if self.model_path and os.path.exists(self.model_path):
-        #     model.load_state_dict(torch.load(self.model_path))
+
+        init_weights_path = self._hparams["model"].get("init_weights_path", None)
+        if init_weights_path and os.path.exists(init_weights_path):
+            model.load_state_dict(torch.load(init_weights_path, map_location="cpu"))
+            print(f"Loaded init weights from {init_weights_path}")
+        elif init_weights_path:
+            raise FileNotFoundError(f"init_weights_path not found: {init_weights_path}")
 
         if self.masked:
             print("Using MultiMaskSNIPWrapper for masked training")

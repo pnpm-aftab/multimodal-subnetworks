@@ -24,6 +24,7 @@ echo "Using python from: $(which python)"
 echo "Conda environment: $CONDA_DEFAULT_ENV"
 
 dataset="fbirn"
+INIT_WEIGHTS_PATH="./init_weights_seed1997_ch64.pth"
 TRAIN_WORKERS=(4 4 6 6 8 8)
 TRAIN_PREFETCH_FACTORS=(2 4 2 4 2 4)
 TRAIN_WORKER=${TRAIN_WORKERS[$SLURM_ARRAY_TASK_ID]}
@@ -42,6 +43,7 @@ python3 train_script_rev.py \
     experiment.max_folds=1 \
     model.masked=False \
     model.model_channels=64 \
+    model.init_weights_path=${INIT_WEIGHTS_PATH} \
     experiment.numvolumes=4 \
     experiment.num_workers=${TRAIN_WORKER} \
     experiment.prefetches=2 \

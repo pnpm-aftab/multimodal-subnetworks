@@ -2,7 +2,7 @@
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 12
-#SBATCH --mem=128g
+#SBATCH --mem=180g
 #SBATCH -p qTRDGPUH
 #SBATCH -t 04:00:00
 #SBATCH --gres=gpu:V100:1
@@ -24,6 +24,7 @@ echo "Using python from: $(which python)"
 echo "Conda environment: $CONDA_DEFAULT_ENV"
 
 dataset="ukb"
+INIT_WEIGHTS_PATH="./init_weights_seed1997_ch64.pth"
 TRAIN_WORKERS=(4 4 6 6 8 8)
 TRAIN_PREFETCH_FACTORS=(2 4 2 4 2 4)
 TRAIN_WORKER=${TRAIN_WORKERS[$SLURM_ARRAY_TASK_ID]}
@@ -43,18 +44,19 @@ python3 train_script_rev.py \
     experiment.max_folds=1 \
     model.masked=False \
     model.model_channels=64 \
-    experiment.numvolumes=4 \
+    model.init_weights_path=${INIT_WEIGHTS_PATH} \
+    experiment.numvolumes=2 \
     experiment.num_workers=${TRAIN_WORKER} \
     experiment.prefetches=2 \
     experiment.prefetch_factor=${TRAIN_PREFETCH_FACTOR} \
     experiment.train_num_workers=${TRAIN_WORKER} \
     experiment.train_prefetches=2 \
     experiment.train_prefetch_factor=${TRAIN_PREFETCH_FACTOR} \
-    experiment.train_persistent_workers=True \
+    experiment.train_persistent_workers=False \
     experiment.eval_num_workers=6 \
     experiment.eval_prefetches=2 \
     experiment.eval_prefetch_factor=2 \
-    experiment.eval_persistent_workers=True \
+    experiment.eval_persistent_workers=False \
     experiment.profile_timings=False \
     experiment.timing_sync_cuda=False \
     experiment.cudnn_benchmark=False \
