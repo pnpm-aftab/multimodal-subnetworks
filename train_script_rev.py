@@ -44,7 +44,7 @@ SEED = random.randint(0, 9999)
 utils.set_global_seed(SEED)
 setup_distributed_port(seed=SEED)
 
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:100"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
 # os.environ["NCCL_SOCKET_IFNAME"] = "ib0"
 # os.environ["NCCL_P2P_LEVEL"] = "NVL"
