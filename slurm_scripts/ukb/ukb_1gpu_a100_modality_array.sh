@@ -4,7 +4,7 @@
 #SBATCH -c 24
 #SBATCH --mem=200g
 #SBATCH -p qTRDGPUH
-#SBATCH -t 04:00:00
+#SBATCH -t 24:00:00
 #SBATCH --gres=gpu:A100:1
 #SBATCH -J ukb_1g_a100_mod
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
@@ -48,17 +48,17 @@ python3 train_script_rev.py \
     model.masked=False \
     model.model_channels=64 \
     model.init_weights_path=${INIT_WEIGHTS_PATH} \
-    experiment.numvolumes=2 \
-    experiment.num_workers=6 \
+    experiment.numvolumes=8 \
+    experiment.num_workers=12 \
     experiment.prefetches=2 \
-    experiment.prefetch_factor=2 \
-    experiment.train_num_workers=6 \
+    experiment.prefetch_factor=4 \
+    experiment.train_num_workers=12 \
     experiment.train_prefetches=2 \
-    experiment.train_prefetch_factor=2 \
+    experiment.train_prefetch_factor=4 \
     experiment.train_persistent_workers=False \
-    experiment.eval_num_workers=6 \
+    experiment.eval_num_workers=12 \
     experiment.eval_prefetches=2 \
-    experiment.eval_prefetch_factor=2 \
+    experiment.eval_prefetch_factor=4 \
     experiment.eval_persistent_workers=False \
     experiment.profile_timings=False \
     experiment.timing_sync_cuda=False \

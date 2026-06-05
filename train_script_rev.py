@@ -279,7 +279,7 @@ class CustomRunner(dl.Runner):
         loader_kwargs = {
             "sampler": sampler,
             "collate_fn": self.collate,
-            "pin_memory": False,
+            "pin_memory": True,
             "worker_init_fn": worker_init_fn,
             "num_workers": num_workers,
         }

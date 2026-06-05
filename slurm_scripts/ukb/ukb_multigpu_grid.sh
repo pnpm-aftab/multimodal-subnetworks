@@ -4,7 +4,7 @@
 #SBATCH -c 24
 #SBATCH --mem=180g
 #SBATCH -p qTRDGPUH
-#SBATCH -t 04:00:00
+#SBATCH -t 24:00:00
 #SBATCH --gres=gpu:V100:2
 #SBATCH -J ukb_2g_grid
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
