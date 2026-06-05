@@ -19,6 +19,7 @@ echo "Running on host: $HOSTNAME" >&2
 echo "Job ID: $SLURM_JOB_ID" >&2
 echo "TMPDIR is: $TMPDIR" >&2
 export TMPDIR=/tmp
+export WANDB_X_STATS_SAMPLING_INTERVAL=2
 export HYDRA_FULL_ERROR=1
 export PYTHONFAULTHANDLER=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
@@ -28,7 +29,6 @@ echo "Using python from: $(which python)"
 echo "Conda environment: $CONDA_DEFAULT_ENV"
 
 dataset="ukb"
-INIT_WEIGHTS_PATH="./init_weights_seed1997_ch64.pth"
 
 python3 train_script_rev.py \
     --config-name new_conf \
@@ -42,7 +42,7 @@ python3 train_script_rev.py \
     experiment.max_folds=1 \
     model.masked=False \
     model.model_channels=64 \
-    model.init_weights_path=${INIT_WEIGHTS_PATH} \
+    model.model_init_seed=1997 \
     experiment.numvolumes=8 \
     experiment.num_workers=12 \
     experiment.prefetches=2 \

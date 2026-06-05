@@ -583,11 +583,20 @@ class CustomRunner(dl.Runner):
         return multimodal_collate({0:snip_dict}) # dict is expected in collate
 
     def get_model(self):
+        model_init_seed = self._hparams["model"].get("model_init_seed", None)
+        if model_init_seed is not None:
+            rng_state = torch.get_rng_state()
+            torch.manual_seed(model_init_seed)
+
         model = ResNet3D(
-            in_channels=1, 
-            n_classes=self.n_classes, 
+            in_channels=1,
+            n_classes=self.n_classes,
             channels=self.n_channels
         )
+
+        if model_init_seed is not None:
+            torch.set_rng_state(rng_state)
+            print(f"Model initialized with fixed seed {model_init_seed}")
 
         init_weights_path = self._hparams["model"].get("init_weights_path", None)
         if init_weights_path and os.path.exists(init_weights_path):

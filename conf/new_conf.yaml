@@ -20,6 +20,7 @@ model:
   n_classes: 1  # Binary gender classification
   model_channels: 64  # ResNet base channels
   init_weights_path: ""
+  model_init_seed: 1997
   model_label: "_resnet3d_gender_64base"
   volume_shape: [256, 256, 256]
   maxshape: 300

@@ -1,25 +1,24 @@
 #!/bin/bash
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -c 24
-#SBATCH --mem=200g
+#SBATCH -c 48
+#SBATCH --mem=256g
 #SBATCH -p qTRDGPUH
 #SBATCH -t 24:00:00
-#SBATCH --gres=gpu:A100:1
-#SBATCH -J ukb_1g_a100_mod
+#SBATCH --gres=gpu:A100:2
+#SBATCH -J ukb_mg_a100_grid
 #SBATCH -D /data/users2/maftab1/multimodal-subnetworks
 #SBATCH --output=/data/users2/maftab1/multimodal-subnetworks/_out/%x_%A_%a.out
 #SBATCH -A psy53c17
 #SBATCH --exclude=arctrddgxa001
-#SBATCH --array=0-2%3
-
-set -e
+#SBATCH --array=0-5%2
 
 sleep 10s
 echo "Running on host: $HOSTNAME" >&2
 echo "Job ID: $SLURM_JOB_ID, Array Task ID: $SLURM_ARRAY_TASK_ID" >&2
 echo "TMPDIR is: $TMPDIR" >&2
 export TMPDIR=/tmp
+export WANDB_X_STATS_SAMPLING_INTERVAL=2
 export HYDRA_FULL_ERROR=1
 export PYTHONFAULTHANDLER=1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
@@ -29,32 +28,33 @@ echo "Using python from: $(which python)"
 echo "Conda environment: $CONDA_DEFAULT_ENV"
 
 dataset="ukb"
-INIT_WEIGHTS_PATH="./init_weights_seed1997_ch64.pth"
-MODALITIES=(falff smri dwi)
-MODALITY=${MODALITIES[$SLURM_ARRAY_TASK_ID]}
+TRAIN_WORKERS=(4 4 6 6 8 8)
+TRAIN_PREFETCH_FACTORS=(2 4 2 4 2 4)
+TRAIN_WORKER=${TRAIN_WORKERS[$SLURM_ARRAY_TASK_ID]}
+TRAIN_PREFETCH_FACTOR=${TRAIN_PREFETCH_FACTORS[$SLURM_ARRAY_TASK_ID]}
 
-echo "Single-modality diagnostic: ${MODALITY}" >&2
+echo "Grid point: train_workers=${TRAIN_WORKER}, train_prefetch_factor=${TRAIN_PREFETCH_FACTOR}" >&2
 
 python3 train_script_rev.py \
     --config-name new_conf \
     --config-dir conf \
-    experiment.experiment_name=${dataset}_${MODALITY}_dense_1gpu_a100_diag \
+    experiment.experiment_name=${dataset}_multimodal_dense_2gpu_a100_grid_nw${TRAIN_WORKER}_pf${TRAIN_PREFETCH_FACTOR} \
     experiment.databases=multimodalSubnetworks \
     experiment.collections=$dataset \
-    experiment.dbfields=[${MODALITY}] \
+    experiment.dbfields=[falff,smri,dwi] \
     experiment.metafields=[gender_encoded] \
     experiment.cv_folds=10 \
     experiment.max_folds=1 \
     model.masked=False \
     model.model_channels=64 \
-    model.init_weights_path=${INIT_WEIGHTS_PATH} \
+    model.model_init_seed=1997 \
     experiment.numvolumes=8 \
-    experiment.num_workers=12 \
+    experiment.num_workers=${TRAIN_WORKER} \
     experiment.prefetches=2 \
-    experiment.prefetch_factor=4 \
-    experiment.train_num_workers=12 \
+    experiment.prefetch_factor=${TRAIN_PREFETCH_FACTOR} \
+    experiment.train_num_workers=${TRAIN_WORKER} \
     experiment.train_prefetches=2 \
-    experiment.train_prefetch_factor=4 \
+    experiment.train_prefetch_factor=${TRAIN_PREFETCH_FACTOR} \
     experiment.train_persistent_workers=False \
     experiment.eval_num_workers=12 \
     experiment.eval_prefetches=2 \
