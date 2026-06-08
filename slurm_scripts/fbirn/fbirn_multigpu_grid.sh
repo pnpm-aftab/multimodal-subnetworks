@@ -44,7 +44,7 @@ python3 train_script_rev.py \
     model.masked=False \
     model.model_channels=64 \
     model.model_init_seed=1997 \
-    experiment.numvolumes=6 \
+    experiment.numvolumes=4 \
     experiment.num_workers=${TRAIN_WORKER} \
     experiment.prefetches=2 \
     experiment.prefetch_factor=${TRAIN_PREFETCH_FACTOR} \

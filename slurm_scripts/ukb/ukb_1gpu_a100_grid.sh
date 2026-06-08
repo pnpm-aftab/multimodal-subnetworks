@@ -28,7 +28,7 @@ echo "Using python from: $(which python)"
 echo "Conda environment: $CONDA_DEFAULT_ENV"
 
 dataset="ukb"
-TRAIN_WORKERS=(4 4 6 6 8 8)
+TRAIN_WORKERS=(10 10 14 14 18 18)
 TRAIN_PREFETCH_FACTORS=(2 4 2 4 2 4)
 TRAIN_WORKER=${TRAIN_WORKERS[$SLURM_ARRAY_TASK_ID]}
 TRAIN_PREFETCH_FACTOR=${TRAIN_PREFETCH_FACTORS[$SLURM_ARRAY_TASK_ID]}
@@ -54,11 +54,11 @@ python3 train_script_rev.py \
     experiment.train_num_workers=${TRAIN_WORKER} \
     experiment.train_prefetches=2 \
     experiment.train_prefetch_factor=${TRAIN_PREFETCH_FACTOR} \
-    experiment.train_persistent_workers=False \
+    experiment.train_persistent_workers=True \
     experiment.eval_num_workers=12 \
     experiment.eval_prefetches=2 \
     experiment.eval_prefetch_factor=4 \
-    experiment.eval_persistent_workers=False \
+    experiment.eval_persistent_workers=True \
     experiment.profile_timings=False \
     experiment.timing_sync_cuda=False \
     experiment.cudnn_benchmark=False \
