@@ -145,6 +145,10 @@ dmypy.json
 .pyre/
 
 # custom
+data/
+analyze_runs.py
+fetch_wandb_runs.py
+report.py
 .vscode
 .DS_Store
 .csv

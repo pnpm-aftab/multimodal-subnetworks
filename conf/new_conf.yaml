@@ -48,7 +48,7 @@ experiment:
   numcubes: 1
   numvolumes: 8
   weights: 1
-  databases: "MindfulTensors"
+  databases: "multimodalSubnetworks"
   collections: "fbirn"
   dbfields: ["falff"]
   metafields: ["gender_encoded"]

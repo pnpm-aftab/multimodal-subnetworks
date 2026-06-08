@@ -253,8 +253,8 @@ class CustomRunner(dl.Runner):
         if self.profile_timings and self.timing_sync_cuda and torch.cuda.is_available():
             torch.cuda.synchronize()
 
-    def _make_sampler(self, dataset, batch_size, seed=None, sample_weights=None):
-        if self.engine.is_ddp:
+    def _make_sampler(self, dataset, batch_size, seed=None, sample_weights=None, distributed=True):
+        if self.engine.is_ddp and distributed:
             rank, world_size = get_rank_world()
             return DistributedDBBatchSampler(
                 dataset,
@@ -483,6 +483,7 @@ class CustomRunner(dl.Runner):
             batch_size=self.num_volumes,
             seed=SEED,
             sample_weights=valid_sample_weights,
+            distributed=False,
         )
         
         valid_dataloader = self._make_loader(
@@ -509,6 +510,7 @@ class CustomRunner(dl.Runner):
             batch_size=self.num_volumes,
             seed=SEED,
             sample_weights=test_sample_weights,
+            distributed=False,
         )
         test_dataloader = self._make_loader(
             test_dataset,
@@ -751,7 +753,7 @@ class CustomRunner(dl.Runner):
             # Get world_size explicitly
             world_size = distributed.get_world_size()
             
-            for key in ["loss", "accuracy"]:
+            for key in ["loss", "accuracy", "auc"]:
                 local_val = self.loader_metrics[key]
                 
                 # Create a tensor on the correct device
