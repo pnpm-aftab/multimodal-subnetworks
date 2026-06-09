@@ -957,12 +957,14 @@ def main(cfg: DictConfig):
 
     # we need oneCycleLR, but not the rest of the curiculum
     subvolume_shape = [cubesizes] * 3
+    _, world_size = get_rank_world()
     onecycle_lr = rmsprop_lr = (
         attenuates # this comes from 0.8/0.2 training? what is this input for oneCycleLR? TODO: trace it further
         * 1
         * cfg.experiment.lr_scale
         * numcubes
         * numvolumes
+        * world_size
         / 256
     )
     wandb_experiment = (
