@@ -28,9 +28,9 @@ from mindfultensors.utils import DBBatchSampler
 
 
 def safe_normalize(img):
-    """Unit interval normalization with epsilon protection against zero-variance volumes."""
     mn, mx = img.min(), img.max()
     if mx - mn < 1e-8:
+        print(f"[safe_normalize] WARNING: zero-variance volume detected (min={mn:.4f}, max={mx:.4f}), returning zeros.")
         return torch.zeros_like(img)
     return (img - mn) / (mx - mn)
 
@@ -49,7 +49,6 @@ os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
 # os.environ["NCCL_SOCKET_IFNAME"] = "ib0"
 # os.environ["NCCL_P2P_LEVEL"] = "NVL"
 
-torch.backends.cudnn.benchmark = False
 if hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
@@ -249,9 +248,89 @@ class CustomRunner(dl.Runner):
             "time/batch_total_sec",
         ]
 
+    @property
+    def _metric_keys(self):
+        keys = ["loss", "accuracy", "learning rate"]
+        if self.profile_timings:
+            keys.extend(self.timing_metric_keys)
+        return keys
+
     def _sync_timing(self):
         if self.profile_timings and self.timing_sync_cuda and torch.cuda.is_available():
             torch.cuda.synchronize()
+
+    def _tick(self):
+        if not self.profile_timings:
+            return None
+        self._sync_timing()
+        return time.perf_counter()
+
+    def _tock(self, t):
+        if not self.profile_timings or t is None:
+            return 0.0
+        self._sync_timing()
+        return time.perf_counter() - t
+
+    def _setup_timing_csv(self, loader_key, rank):
+        self.timing_csv_filename = os.path.join(
+            self._logdir, f"batch_timing_{loader_key}_rank_{rank}.csv"
+        )
+        file_exists = (
+            os.path.isfile(self.timing_csv_filename)
+            and os.path.getsize(self.timing_csv_filename) > 0
+        )
+        self.timing_csv_file = open(self.timing_csv_filename, "a", newline="")
+        self.timing_csv_writer = csv.writer(self.timing_csv_file)
+        if not file_exists:
+            self.timing_csv_writer.writerow([
+                "epoch", "batch", "data_wait_h2d_sec", "forward_sec",
+                "backward_sec", "optimizer_sec", "compute_sec", "batch_total_sec",
+            ])
+
+    def _train_step(self, sample, modality, label):
+        """Forward + backward pass. Returns (y_hat, loss, timing)."""
+        timing = {}
+        if self.bit16:
+            t = self._tick()
+            with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+                y_hat = self.model.forward(sample) if not self.masked else self.model.forward(sample, modality)
+                loss = self.criterion(y_hat, label.float())
+            timing["time/forward_sec"] = self._tock(t)
+            t = self._tick()
+            scaler.scale(loss).backward()
+            timing["time/backward_sec"] = self._tock(t)
+            t = self._tick()
+            scaler.step(self.optimizer)
+            self.scheduler.step()
+            scaler.update()
+            self.optimizer.zero_grad()
+            timing["time/optimizer_sec"] = self._tock(t)
+        else:
+            t = self._tick()
+            y_hat = self.model.forward(sample) if not self.masked else self.model.forward(sample, modality)
+            loss = self.criterion(y_hat, label.float())
+            timing["time/forward_sec"] = self._tock(t)
+            t = self._tick()
+            loss.backward()
+            timing["time/backward_sec"] = self._tock(t)
+            t = self._tick()
+            self.optimizer.step()
+            self.scheduler.step()
+            self.optimizer.zero_grad()
+            timing["time/optimizer_sec"] = self._tock(t)
+        return y_hat, loss, timing
+
+    def _eval_step(self, sample, modality, label):
+        """Forward-only pass (no grad). Returns (y_hat, loss, timing)."""
+        t = self._tick()
+        with torch.no_grad():
+            y_hat = self.model.forward(sample) if not self.masked else self.model.forward(sample, modality)
+            loss = self.criterion(y_hat, label.float())
+        return y_hat, loss, {
+            "time/forward_sec": self._tock(t),
+            "time/backward_sec": 0.0,
+            "time/optimizer_sec": 0.0,
+        }
 
     def _make_sampler(self, dataset, batch_size, seed=None, sample_weights=None, distributed=True):
         if self.engine.is_ddp and distributed:
@@ -450,11 +529,13 @@ class CustomRunner(dl.Runner):
             id=self.index_id,
         )
         
-        # Use standard DBBatchSampler for mixed-modality batches (cross-modality competition)
+        # cv_seed comes from config — identical on every DDP rank, unlike module-level SEED.
+        cv_seed = self._hparams["experiment"].get("cv_seed", 42)
+
         train_sampler = self._make_sampler(
             train_dataset,
             batch_size=self.num_volumes,
-            seed=SEED,
+            seed=cv_seed,
             sample_weights=train_sample_weights,
         )
         
@@ -481,7 +562,7 @@ class CustomRunner(dl.Runner):
         valid_sampler = self._make_sampler(
             valid_dataset,
             batch_size=self.num_volumes,
-            seed=SEED,
+            seed=cv_seed,
             sample_weights=valid_sample_weights,
             distributed=False,
         )
@@ -508,7 +589,7 @@ class CustomRunner(dl.Runner):
         test_sampler = self._make_sampler(
             test_dataset,
             batch_size=self.num_volumes,
-            seed=SEED,
+            seed=cv_seed,
             sample_weights=test_sample_weights,
             distributed=False,
         )
@@ -666,101 +747,52 @@ class CustomRunner(dl.Runner):
 
     def on_loader_start(self, runner):
         super().on_loader_start(runner)
-        metric_keys = ["loss", "accuracy", "learning rate"]
-        if self.profile_timings:
-            metric_keys.extend(self.timing_metric_keys)
         self.meters = {
             key: metrics.AdditiveValueMetric(compute_on_call=False)
-            for key in metric_keys
+            for key in self._metric_keys
         }
-        self.meters["auc"] = metrics.AUCMetric(
-            compute_on_call=False
-        )
+        self.meters["auc"] = metrics.AUCMetric(compute_on_call=False)
         self._last_batch_end_time = None
         self._current_data_wait_h2d_sec = 0.0
 
-        # --- CSV LOGGING SETUP ---
         rank = distributed.get_rank()
-        loader_key = self.loader_key # e.g., "train", "valid"
-        self.csv_filename = os.path.join(
-            self._logdir, 
-            f"raw_preds_{loader_key}_rank_{rank}.csv"
-        )
+        loader_key = self.loader_key
+        self.csv_filename = os.path.join(self._logdir, f"raw_preds_{loader_key}_rank_{rank}.csv")
         file_exists = os.path.isfile(self.csv_filename) and os.path.getsize(self.csv_filename) > 0
-
-        self.csv_file = open(self.csv_filename, 'a', newline='')
+        self.csv_file = open(self.csv_filename, "a", newline="")
         self.csv_writer = csv.writer(self.csv_file)
-        
-        # Write header only if file is new
         if not file_exists:
             self.csv_writer.writerow(["epoch", "probability", "target"])
 
         if self.profile_timings:
-            self.timing_csv_filename = os.path.join(
-                self._logdir,
-                f"batch_timing_{loader_key}_rank_{rank}.csv",
-            )
-            timing_file_exists = (
-                os.path.isfile(self.timing_csv_filename)
-                and os.path.getsize(self.timing_csv_filename) > 0
-            )
-            self.timing_csv_file = open(self.timing_csv_filename, 'a', newline='')
-            self.timing_csv_writer = csv.writer(self.timing_csv_file)
-            if not timing_file_exists:
-                self.timing_csv_writer.writerow(
-                    [
-                        "epoch",
-                        "batch",
-                        "data_wait_h2d_sec",
-                        "forward_sec",
-                        "backward_sec",
-                        "optimizer_sec",
-                        "compute_sec",
-                        "batch_total_sec",
-                    ]
-                )
+            self._setup_timing_csv(loader_key, rank)
 
     def on_batch_start(self, runner):
-        parent = super()
-        if hasattr(parent, "on_batch_start"):
-            parent.on_batch_start(runner)
+        super().on_batch_start(runner)
         if self.profile_timings:
-            self._sync_timing()
-            now = time.perf_counter()
+            now = self._tick()
             self._current_data_wait_h2d_sec = (
-                0.0
-                if self._last_batch_end_time is None
+                0.0 if self._last_batch_end_time is None
                 else now - self._last_batch_end_time
             )
 
     def on_batch_end(self, runner):
         if self.profile_timings:
-            self._sync_timing()
-            self._last_batch_end_time = time.perf_counter()
-        parent = super()
-        if hasattr(parent, "on_batch_end"):
-            parent.on_batch_end(runner)
+            self._last_batch_end_time = self._tick()
+        super().on_batch_end(runner)
 
     def on_loader_end(self, runner):
-        metric_keys = ["loss", "accuracy", "learning rate"]
-        if self.profile_timings:
-            metric_keys.extend(self.timing_metric_keys)
-        for key in metric_keys:
+        for key in self._metric_keys:
             self.loader_metrics[key] = self.meters[key].compute()[0]
         self.loader_metrics["auc"] = self.meters["auc"].compute()[2]
 
         if self.engine.is_ddp:
-            # Get world_size explicitly
             world_size = distributed.get_world_size()
-            
+            # Timing metrics are intentionally left per-rank (not averaged) —
+            # per-rank values are more useful for diagnosing data/compute bottlenecks.
             for key in ["loss", "accuracy", "auc"]:
                 local_val = self.loader_metrics[key]
-                
-                # Create a tensor on the correct device
-                # self.engine.device is reliable for the current worker's device
                 val_tensor = torch.tensor([local_val], device=self.engine.device)
-                
-                # FIX: Pass world_size to mean_reduce
                 avg_tensor = distributed.mean_reduce(val_tensor, world_size)
                 self.loader_metrics[key] = avg_tensor.item()
 
@@ -774,136 +806,57 @@ class CustomRunner(dl.Runner):
 
     # model train/valid step
     def handle_batch(self, batch):
-
-        # # Add synchronization before processing
-        # if self.engine.is_ddp:
-        #     torch.cuda.synchronize()
-        
-        if self.multimodal: #MM
+        if self.multimodal:
             sample, modality, label = batch
         else:
             sample, label = batch
+            modality = None
 
-        timing = {}
-        if self.profile_timings:
-            self._sync_timing()
-            compute_start = time.perf_counter()
+        compute_start = self._tick()
 
-        # run model forward/backward pass
         if self.model.training:
-            if self.bit16:
-                forward_start = time.perf_counter() if self.profile_timings else None
-                with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-                    y_hat = self.model.forward(sample) if not self.masked else self.model.forward(sample, modality)
-                    loss = self.criterion(y_hat, label.float())
-                if self.profile_timings:
-                    self._sync_timing()
-                    timing["time/forward_sec"] = time.perf_counter() - forward_start
-
-                backward_start = time.perf_counter() if self.profile_timings else None
-                scaler.scale(loss).backward()
-                if self.profile_timings:
-                    self._sync_timing()
-                    timing["time/backward_sec"] = time.perf_counter() - backward_start
-
-                optimizer_start = time.perf_counter() if self.profile_timings else None
-                scaler.step(self.optimizer)
-                self.scheduler.step()
-                scaler.update()
-                self.optimizer.zero_grad()
-                if self.profile_timings:
-                    self._sync_timing()
-                    timing["time/optimizer_sec"] = time.perf_counter() - optimizer_start
-            else:
-                forward_start = time.perf_counter() if self.profile_timings else None
-                y_hat = self.model.forward(sample) if not self.masked else self.model.forward(sample, modality)
-                loss = self.criterion(y_hat, label.float())
-                if self.profile_timings:
-                    self._sync_timing()
-                    timing["time/forward_sec"] = time.perf_counter() - forward_start
-
-                backward_start = time.perf_counter() if self.profile_timings else None
-                loss.backward()
-                if self.profile_timings:
-                    self._sync_timing()
-                    timing["time/backward_sec"] = time.perf_counter() - backward_start
-
-                optimizer_start = time.perf_counter() if self.profile_timings else None
-                self.optimizer.step()
-                self.scheduler.step()
-                self.optimizer.zero_grad()
-                if self.profile_timings:
-                    self._sync_timing()
-                    timing["time/optimizer_sec"] = time.perf_counter() - optimizer_start
+            y_hat, loss, timing = self._train_step(sample, modality, label)
         else:
-            forward_start = time.perf_counter() if self.profile_timings else None
-            with torch.no_grad():
-                y_hat = self.model.forward(sample) if not self.masked else self.model.forward(sample, modality)
-                loss = self.criterion(y_hat, label.float())
-            if self.profile_timings:
-                self._sync_timing()
-                timing["time/forward_sec"] = time.perf_counter() - forward_start
-                timing["time/backward_sec"] = 0.0
-                timing["time/optimizer_sec"] = 0.0
+            y_hat, loss, timing = self._eval_step(sample, modality, label)
 
         if self.profile_timings:
-            self._sync_timing()
-            timing["time/compute_sec"] = time.perf_counter() - compute_start
+            timing["time/compute_sec"] = self._tock(compute_start)
             timing["time/data_wait_h2d_sec"] = self._current_data_wait_h2d_sec
-            timing["time/batch_total_sec"] = (
-                timing["time/data_wait_h2d_sec"] + timing["time/compute_sec"]
-            )
+            timing["time/batch_total_sec"] = timing["time/data_wait_h2d_sec"] + timing["time/compute_sec"]
 
-        # Metrics calculation and CSV logging
         with torch.no_grad():
             proba_preds = torch.sigmoid(y_hat)
             preds = proba_preds > 0.5
             accuracy = (preds == label).float().mean()
-            
-            # CSV logging: Move to CPU / Numpy
             probs_np = proba_preds.detach().cpu().numpy().flatten()
             targets_np = label.detach().cpu().numpy().flatten()
-            epochs_np = [self.epoch_step] * len(probs_np)
-            rows = zip(epochs_np, probs_np, targets_np)
-            self.csv_writer.writerows(rows)
-
+            self.csv_writer.writerows(zip([self.epoch_step] * len(probs_np), probs_np, targets_np))
 
         self.batch_metrics.update({
             "loss": loss,
-            "accuracy": accuracy, 
-            "learning rate": torch.tensor(
-                    self.optimizer.param_groups[0]["lr"]
-            )
+            "accuracy": accuracy,
+            "learning rate": torch.tensor(self.optimizer.param_groups[0]["lr"]),
         })
         if self.profile_timings:
-            self.batch_metrics.update(
-                {
-                    key: torch.tensor(value, device=loss.device)
-                    for key, value in timing.items()
-                }
-            )
-            self.timing_csv_writer.writerow(
-                [
-                    self.epoch_step,
-                    getattr(self, "batch_step", ""),
-                    timing["time/data_wait_h2d_sec"],
-                    timing["time/forward_sec"],
-                    timing["time/backward_sec"],
-                    timing["time/optimizer_sec"],
-                    timing["time/compute_sec"],
-                    timing["time/batch_total_sec"],
-                ]
-            )
+            self.batch_metrics.update({
+                key: torch.tensor(value, device=loss.device)
+                for key, value in timing.items()
+            })
+            self.timing_csv_writer.writerow([
+                self.epoch_step,
+                getattr(self, "batch_step", ""),
+                timing["time/data_wait_h2d_sec"],
+                timing["time/forward_sec"],
+                timing["time/backward_sec"],
+                timing["time/optimizer_sec"],
+                timing["time/compute_sec"],
+                timing["time/batch_total_sec"],
+            ])
         for key in self.batch_metrics:
-            self.meters[key].update(
-                self.batch_metrics[key].item(), self.batch_size
-            )
+            self.meters[key].update(self.batch_metrics[key].item(), self.batch_size)
         self.meters["auc"].update(proba_preds, label)
 
-        del sample
-        del label
-        del y_hat
-        del loss
+        del sample, label, y_hat, loss
 
 @hydra.main(config_path="conf", config_name="new_conf", version_base=None)
 def main(cfg: DictConfig):
@@ -957,7 +910,9 @@ def main(cfg: DictConfig):
 
     # we need oneCycleLR, but not the rest of the curiculum
     subvolume_shape = [cubesizes] * 3
-    _, world_size = get_rank_world()
+    # Use SLURM_GPUS_ON_NODE — same source as get_engine() — since DDP is not
+    # initialized yet when main() runs (Catalyst forks processes inside runner.run()).
+    world_size = int(os.environ.get("SLURM_GPUS_ON_NODE", torch.cuda.device_count()))
     onecycle_lr = rmsprop_lr = (
         attenuates # this comes from 0.8/0.2 training? what is this input for oneCycleLR? TODO: trace it further
         * 1
