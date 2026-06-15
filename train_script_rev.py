@@ -81,7 +81,6 @@ class DistributedDBBatchSampler(DBBatchSampler):
         seed=None,
         rank=None,
         world_size=None,
-        sample_weights=None,
     ):
         super().__init__(data_source, batch_size=batch_size, seed=seed)
         detected_rank, detected_world_size = get_rank_world()
@@ -90,11 +89,6 @@ class DistributedDBBatchSampler(DBBatchSampler):
         self.global_batch_size = self.batch_size * self.world_size
         self.num_batches = int(math.ceil(self.data_size / self.global_batch_size))
         self.total_size = self.num_batches * self.global_batch_size
-        if sample_weights is None:
-            sample_weights = [1] * self.data_size
-        if len(sample_weights) != self.data_size:
-            raise ValueError("sample_weights must be aligned with dataset indices")
-        self.sample_weights = np.asarray(sample_weights, dtype=np.float32)
 
     def __iter__(self):
         if self.seed is not None:
@@ -112,29 +106,9 @@ class DistributedDBBatchSampler(DBBatchSampler):
         rank_batches = []
         for start in range(0, self.total_size, self.global_batch_size):
             global_batch = indices[start : start + self.global_batch_size]
-            per_rank = [[] for _ in range(self.world_size)]
-            per_rank_weight = [0.0 for _ in range(self.world_size)]
-
-            # Heaviest subjects first makes greedy balancing effective while the
-            # enclosing global batch remains shuffled.
-            ordered = sorted(
-                global_batch,
-                key=lambda idx: float(self.sample_weights[int(idx)]),
-                reverse=True,
-            )
-            for idx in ordered:
-                candidates = [
-                    r for r in range(self.world_size)
-                    if len(per_rank[r]) < self.batch_size
-                ]
-                target_rank = min(
-                    candidates,
-                    key=lambda r: (per_rank_weight[r], len(per_rank[r]), r),
-                )
-                per_rank[target_rank].append(idx)
-                per_rank_weight[target_rank] += float(self.sample_weights[int(idx)])
-
-            rank_batches.append(np.asarray(per_rank[self.rank]))
+            rank_start = self.rank * self.batch_size
+            rank_end = rank_start + self.batch_size
+            rank_batches.append(global_batch[rank_start:rank_end])
 
         return iter(rank_batches)
 
@@ -332,7 +306,7 @@ class CustomRunner(dl.Runner):
             "time/optimizer_sec": 0.0,
         }
 
-    def _make_sampler(self, dataset, batch_size, seed=None, sample_weights=None, distributed=True):
+    def _make_sampler(self, dataset, batch_size, seed=None, distributed=True):
         if self.engine.is_ddp and distributed:
             rank, world_size = get_rank_world()
             return DistributedDBBatchSampler(
@@ -341,7 +315,6 @@ class CustomRunner(dl.Runner):
                 seed=seed,
                 rank=rank,
                 world_size=world_size,
-                sample_weights=sample_weights,
             )
         return DBBatchSampler(dataset, batch_size=batch_size, seed=seed)
 
@@ -463,7 +436,7 @@ class CustomRunner(dl.Runner):
             doc["id"]: doc
             for doc in posts_meta.find(
                 {"id": {"$in": all_ids}},
-                {"id": 1, label_field: 1, "modalities": 1, "_id": 0},
+                {"id": 1, label_field: 1, "_id": 0},
             )
         }
         missing_label_ids = [id for id in all_ids if id not in meta_docs]
@@ -481,18 +454,6 @@ class CustomRunner(dl.Runner):
         train_ids = all_ids[train_idx].tolist() # mongo expects default python list, not numpy array
         valid_ids = all_ids[valid_idx].tolist()
         test_ids = all_ids[test_idx].tolist()
-        requested_modalities = set(self.db_fields)
-        modality_counts = {
-            id: max(
-                1,
-                len(set(meta_docs[id].get("modalities", [])).intersection(requested_modalities)),
-            )
-            for id in all_ids
-        }
-        train_sample_weights = [modality_counts[id] for id in train_ids]
-        valid_sample_weights = [modality_counts[id] for id in valid_ids]
-        test_sample_weights = [modality_counts[id] for id in test_ids]
-
         # get data for masks calculation
         if self.masked:
             print("Preparing SNIP mask data...")
@@ -536,7 +497,6 @@ class CustomRunner(dl.Runner):
             train_dataset,
             batch_size=self.num_volumes,
             seed=cv_seed,
-            sample_weights=train_sample_weights,
         )
         
         train_dataloader = self._make_loader(
@@ -563,7 +523,6 @@ class CustomRunner(dl.Runner):
             valid_dataset,
             batch_size=self.num_volumes,
             seed=cv_seed,
-            sample_weights=valid_sample_weights,
             distributed=False,
         )
         
@@ -590,7 +549,6 @@ class CustomRunner(dl.Runner):
             test_dataset,
             batch_size=self.num_volumes,
             seed=cv_seed,
-            sample_weights=test_sample_weights,
             distributed=False,
         )
         test_dataloader = self._make_loader(
